@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data files (large CSVs — regenerate with src/scm_temporal_v1.py)
+data/*.csv
+data/*.parquet
+
+# Model pickles (regenerate with src/run_pipeline.py)
+models/*.pkl
+
+# Keep reports (figures committed for documentation)
+# reports/  ← intentionally NOT ignored
