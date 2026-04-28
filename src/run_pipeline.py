@@ -32,7 +32,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, accuracy_score, roc_curve, classification_report
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, GridSearchCV
 from sklearn.ensemble import GradientBoostingClassifier
 from scipy import stats
 import joblib
@@ -59,558 +59,651 @@ plt.rcParams.update({
     'figure.dpi': 150,
 })
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 1: Load Data
-# ══════════════════════════════════════════════════════════════════════════════
-print("=" * 65)
-print("  STEP 1: Loading Temporal SCM Datasets")
-print("=" * 65)
+def main():
+    """Run the complete Week 1 pipeline: train, evaluate, and generate all outputs."""
 
-train = pd.read_csv(DATA_DIR / "temporal_credit_agg_train.csv")
-test  = pd.read_csv(DATA_DIR / "temporal_credit_agg_test.csv")
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 1: Load Data
+    # ══════════════════════════════════════════════════════════════════════════
+    print("=" * 65)
+    print("  STEP 1: Loading Temporal SCM Datasets")
+    print("=" * 65)
 
-test_normal    = test[test['split'] == 'normal'].copy()
-test_recession = test[test['split'] == 'recession'].copy()
+    train = pd.read_csv(DATA_DIR / "temporal_credit_agg_train.csv")
+    test  = pd.read_csv(DATA_DIR / "temporal_credit_agg_test.csv")
 
-LABEL = 'default'
-X_train      = train.drop(columns=[LABEL, 'split'], errors='ignore')
-y_train      = train[LABEL]
-X_test_norm  = test_normal.drop(columns=[LABEL, 'split'], errors='ignore')
-y_test_norm  = test_normal[LABEL]
-X_test_rec   = test_recession.drop(columns=[LABEL, 'split'], errors='ignore')
-y_test_rec   = test_recession[LABEL]
+    test_normal    = test[test['split'] == 'normal'].copy()
+    test_recession = test[test['split'] == 'recession'].copy()
 
-print(f"  Train:     {X_train.shape[0]:,} borrowers | default rate: {y_train.mean():.2%}")
-print(f"  Normal:    {X_test_norm.shape[0]:,} borrowers | default rate: {y_test_norm.mean():.2%}")
-print(f"  Recession: {X_test_rec.shape[0]:,} borrowers | default rate: {y_test_rec.mean():.2%}")
+    LABEL = 'default'
+    X_train      = train.drop(columns=[LABEL, 'split'], errors='ignore')
+    y_train      = train[LABEL]
+    X_test_norm  = test_normal.drop(columns=[LABEL, 'split'], errors='ignore')
+    y_test_norm  = test_normal[LABEL]
+    X_test_rec   = test_recession.drop(columns=[LABEL, 'split'], errors='ignore')
+    y_test_rec   = test_recession[LABEL]
 
-# ── Feature sets ──────────────────────────────────────────────────────────────
-FEATURE_SETS = {
-    'xgboost_all': [
-        'age_bucket', 'employment_status', 'household_structure',
-        'income_mean', 'income_cv', 'income_trend',
-        'utility_rate', 'utility_recent',
-        'dti_final', 'dti_mean',
-        'shock_total', 'shock_recent',
-        'sc_final', 'sc_trend', 'peer_shock_exposure',
-        'digital_footprint_mean',
-        # Spurious zone
+    print(f"  Train:     {X_train.shape[0]:,} borrowers | default rate: {y_train.mean():.2%}")
+    print(f"  Normal:    {X_test_norm.shape[0]:,} borrowers | default rate: {y_test_norm.mean():.2%}")
+    print(f"  Recession: {X_test_rec.shape[0]:,} borrowers | default rate: {y_test_rec.mean():.2%}")
+
+    # ── Feature sets ──────────────────────────────────────────────────────────
+    FEATURE_SETS = {
+        'xgboost_all': [
+            'age_bucket', 'employment_status', 'household_structure',
+            'income_mean', 'income_cv', 'income_trend',
+            'utility_rate', 'utility_recent',
+            'dti_final', 'dti_mean',
+            'shock_total', 'shock_recent',
+            'sc_final', 'sc_trend', 'peer_shock_exposure',
+            'digital_footprint_mean',
+            # Spurious zone
+            'dark_mode_user', 'signup_weekend', 'social_media_score',
+            'geolocation_cluster', 'app_diversity_index', 'num_inquiries',
+        ],
+        'causal_lr_observable': [
+            'income_mean', 'income_cv', 'utility_rate',
+            'dti_final', 'employment_status', 'shock_total',
+        ],
+        'causal_lr_behavioural': [
+            'income_mean', 'income_cv', 'utility_rate',
+            'dti_final', 'employment_status', 'shock_total',
+            'financial_agency', 'financial_consistency',
+        ],
+    }
+
+    SPURIOUS_COLS = [
         'dark_mode_user', 'signup_weekend', 'social_media_score',
         'geolocation_cluster', 'app_diversity_index', 'num_inquiries',
-    ],
-    'causal_lr_observable': [
-        'income_mean', 'income_cv', 'utility_rate',
-        'dti_final', 'employment_status', 'shock_total',
-    ],
-    'causal_lr_behavioural': [
-        'income_mean', 'income_cv', 'utility_rate',
-        'dti_final', 'employment_status', 'shock_total',
-        'financial_agency', 'financial_consistency',
-    ],
-}
-
-SPURIOUS_COLS = [
-    'dark_mode_user', 'signup_weekend', 'social_media_score',
-    'geolocation_cluster', 'app_diversity_index', 'num_inquiries',
-]
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 2: Train GBM-All (The Villain)
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 2: Training GBM-All (The Villain)")
-print("=" * 65)
-
-feats_xgb = FEATURE_SETS['xgboost_all']
-
-booster = GradientBoostingClassifier(
-    n_estimators=200, max_depth=5, learning_rate=0.1,
-    subsample=0.8, random_state=42,
-)
-booster.fit(X_train[feats_xgb], y_train)
-
-# Normal evaluation
-prob_xgb_norm = booster.predict_proba(X_test_norm[feats_xgb])[:, 1]
-auc_xgb_norm  = roc_auc_score(y_test_norm, prob_xgb_norm)
-
-# Recession evaluation
-prob_xgb_rec  = booster.predict_proba(X_test_rec[feats_xgb])[:, 1]
-auc_xgb_rec   = roc_auc_score(y_test_rec, prob_xgb_rec)
-
-print(f"  Normal AUC:    {auc_xgb_norm:.4f}")
-print(f"  Recession AUC: {auc_xgb_rec:.4f}")
-print(f"  Delta:         {auc_xgb_rec - auc_xgb_norm:+.4f}")
-
-# Save model
-joblib.dump(booster, MODELS_DIR / "xgboost_model.pkl")
-print(f"  Saved: models/xgboost_model.pkl")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 3: Train Causal-LR Observable (The Hero)
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 3: Training Causal-LR Observable (The Hero)")
-print("=" * 65)
-
-feats_obs = FEATURE_SETS['causal_lr_observable']
-
-lr_obs = Pipeline([
-    ('scaler', StandardScaler()),
-    ('lr', LogisticRegression(penalty='l2', C=1.0, max_iter=1000, random_state=42)),
-])
-
-# 5-fold CV
-cv_scores_obs = cross_val_score(lr_obs, X_train[feats_obs], y_train, cv=5, scoring='roc_auc')
-print(f"  5-Fold CV AUC: {cv_scores_obs.mean():.4f} +/- {cv_scores_obs.std():.4f}")
-
-lr_obs.fit(X_train[feats_obs], y_train)
-
-# Normal evaluation
-prob_obs_norm = lr_obs.predict_proba(X_test_norm[feats_obs])[:, 1]
-auc_obs_norm  = roc_auc_score(y_test_norm, prob_obs_norm)
-
-# Recession evaluation
-prob_obs_rec  = lr_obs.predict_proba(X_test_rec[feats_obs])[:, 1]
-auc_obs_rec   = roc_auc_score(y_test_rec, prob_obs_rec)
-
-print(f"  Normal AUC:    {auc_obs_norm:.4f}")
-print(f"  Recession AUC: {auc_obs_rec:.4f}")
-print(f"  Delta:         {auc_obs_rec - auc_obs_norm:+.4f}")
-
-# Save model
-joblib.dump(lr_obs, MODELS_DIR / "causal_lr_model.pkl")
-print(f"  Saved: models/causal_lr_model.pkl")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 4: Train Causal-LR Behavioural (The Hero+)
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 4: Training Causal-LR Behavioural (The Hero+)")
-print("=" * 65)
-
-feats_beh = FEATURE_SETS['causal_lr_behavioural']
-
-lr_beh = Pipeline([
-    ('scaler', StandardScaler()),
-    ('lr', LogisticRegression(penalty='l2', C=1.0, max_iter=1000, random_state=42)),
-])
-
-cv_scores_beh = cross_val_score(lr_beh, X_train[feats_beh], y_train, cv=5, scoring='roc_auc')
-print(f"  5-Fold CV AUC: {cv_scores_beh.mean():.4f} +/- {cv_scores_beh.std():.4f}")
-
-lr_beh.fit(X_train[feats_beh], y_train)
-
-# Normal evaluation
-prob_beh_norm = lr_beh.predict_proba(X_test_norm[feats_beh])[:, 1]
-auc_beh_norm  = roc_auc_score(y_test_norm, prob_beh_norm)
-
-# Recession evaluation
-prob_beh_rec  = lr_beh.predict_proba(X_test_rec[feats_beh])[:, 1]
-auc_beh_rec   = roc_auc_score(y_test_rec, prob_beh_rec)
-
-print(f"  Normal AUC:    {auc_beh_norm:.4f}")
-print(f"  Recession AUC: {auc_beh_rec:.4f}")
-print(f"  Delta:         {auc_beh_rec - auc_beh_norm:+.4f}")
-
-joblib.dump(lr_beh, MODELS_DIR / "causal_lr_behavioural_model.pkl")
-print(f"  Saved: models/causal_lr_behavioural_model.pkl")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 5: Results Summary Table
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 5: Recession Stress Test Results")
-print("=" * 65)
-
-results = pd.DataFrame({
-    'Model': ['GBM-All (Villain)', 'Causal-LR Observable (Hero)', 'Causal-LR Behavioural (Hero+)'],
-    'AUC_Normal': [auc_xgb_norm, auc_obs_norm, auc_beh_norm],
-    'AUC_Recession': [auc_xgb_rec, auc_obs_rec, auc_beh_rec],
-})
-results['Delta'] = results['AUC_Recession'] - results['AUC_Normal']
-results['Stability'] = results['AUC_Recession'].apply(
-    lambda x: 'COLLAPSED' if x < 0.50 else ('DEGRADED' if x < 0.70 else 'STABLE'))
-
-results.to_csv(REPORTS_DIR / "recession_stress_test_results.csv", index=False)
-
-print(f"\n  {'Model':<32} {'Normal':>8} {'Recession':>10} {'Delta':>8} {'Status':>10}")
-print("  " + "-" * 72)
-for _, row in results.iterrows():
-    print(f"  {row['Model']:<32} {row['AUC_Normal']:>8.4f} {row['AUC_Recession']:>10.4f} "
-          f"{row['Delta']:>+8.4f} {row['Stability']:>10}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 6: Feature Importance Analysis
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 6: Feature Importance Analysis (GBM)")
-print("=" * 65)
-
-importances = pd.Series(booster.feature_importances_, index=feats_xgb).sort_values(ascending=False)
-
-print("\n  Sklearn Feature Importance Ranking:")
-for i, (feat, imp) in enumerate(importances.items(), 1):
-    marker = " <-- SPURIOUS" if feat in SPURIOUS_COLS else ""
-    print(f"  {i:>3}. {feat:<28} {imp:.4f}{marker}")
-
-spur_in_top3 = sum(1 for f in list(importances.head(3).index) if f in SPURIOUS_COLS)
-print(f"\n  Spurious features in top-3: {spur_in_top3}/3")
-# Feature importance plot
-fig, ax = plt.subplots(figsize=(10, 9))
-imp_sorted = importances.sort_values()
-colors_fi = ['#e74c3c' if f in SPURIOUS_COLS else '#3498db' for f in imp_sorted.index]
-imp_sorted.plot(kind='barh', ax=ax, color=colors_fi, edgecolor='white', linewidth=0.5)
-causal_patch  = mpatches.Patch(color='#3498db', label='Causal / Observable Feature')
-spurious_patch = mpatches.Patch(color='#e74c3c', label='Spurious Feature (reverses in recession)')
-ax.legend(handles=[causal_patch, spurious_patch], fontsize=10, loc='lower right')
-ax.set_title('GBM-All Feature Importances\nSpurious features are prominently used!', fontweight='bold')
-ax.set_xlabel('Importance', fontsize=12)
-plt.tight_layout()
-fig.savefig(REPORTS_DIR / 'feature_importance_gbm.png', dpi=150, bbox_inches='tight')
-plt.close()
-print(f"  Saved: reports/feature_importance_gbm.png")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 7: Causal-LR Coefficient Extraction with CIs
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 7: Causal-LR Coefficients with 95% CIs")
-print("=" * 65)
-
-lr_model = lr_obs.named_steps['lr']
-scaler_obj = lr_obs.named_steps['scaler']
-coefficients = lr_model.coef_[0]
-intercept = lr_model.intercept_[0]
-
-# Compute standard errors
-X_scaled = scaler_obj.transform(X_train[feats_obs])
-probs = lr_obs.predict_proba(X_train[feats_obs])[:, 1]
-W = probs * (1 - probs)
-XW = X_scaled.T * W
-hessian = XW @ X_scaled
-try:
-    cov_matrix = np.linalg.inv(hessian)
-    std_errors = np.sqrt(np.diag(cov_matrix))
-except np.linalg.LinAlgError:
-    std_errors = np.zeros(len(coefficients))
-
-z_critical = stats.norm.ppf(0.975)
-
-# employment_status expected sign is 'Negative' in isolation, but its direct
-# causal effect is mediated through income_mean and utility_rate. Once those
-# are in the model, employment's residual coefficient may be near-zero or
-# slightly positive (multicollinearity). This is statistically correct.
-expected_signs = {
-    'income_mean': 'Negative',
-    'income_cv': 'Positive',
-    'utility_rate': 'Negative',
-    'dti_final': 'Positive',
-    'employment_status': 'Either',   # mediated effect — see note below
-    'shock_total': 'Positive',
-}
-
-print(f"\n  {'Feature':<24} {'Coef':>8} {'SE':>8} {'95% CI':>22} {'Expected':>10} {'Match':>6}")
-print("  " + "-" * 82)
-
-coef_data = []
-for feat, coef, se in zip(feats_obs, coefficients, std_errors):
-    ci_lo = coef - z_critical * se
-    ci_hi = coef + z_critical * se
-    exp_sign = expected_signs[feat]
-    actual_sign = 'Positive' if coef > 0 else 'Negative'
-    if exp_sign == 'Either':
-        # employment is a mediated variable — CI spanning 0 is fine
-        includes_zero = ci_lo <= 0 <= ci_hi
-        match = 'OK*' if includes_zero else ('YES' if actual_sign == 'Negative' else 'OK*')
-    else:
-        match = 'YES' if actual_sign == exp_sign else 'NO'
-    print(f"  {feat:<24} {coef:>+8.4f} {se:>8.4f} [{ci_lo:>+8.4f}, {ci_hi:>+8.4f}]  {exp_sign:>10} {match:>6}")
-    coef_data.append({'feature': feat, 'coefficient': coef, 'std_error': se,
-                      'ci_lower': ci_lo, 'ci_upper': ci_hi, 'expected_sign': exp_sign, 'match': match})
-
-print(f"  {'intercept':<24} {intercept:>+8.4f}")
-
-# Note on employment_status
-print(f"\n  NOTE on employment_status:")
-print(f"  The coefficient is near-zero because employment's causal effect on")
-print(f"  default is MEDIATED through income_mean and utility_rate (both already")
-print(f"  in the model). The 95% CI spans zero, confirming the residual effect")
-print(f"  is not statistically significant — this is expected multicollinearity,")
-print(f"  NOT a broken causal structure. Employment remains in the model because")
-print(f"  it is causally valid and adds marginal stability.")
-
-pd.DataFrame(coef_data).to_csv(REPORTS_DIR / "causal_lr_coefficients.csv", index=False)
-
-# Coefficient plot
-fig, ax = plt.subplots(figsize=(10, 5.5))
-y_pos = range(len(feats_obs))
-bar_colors = []
-for feat, c in zip(feats_obs, coefficients):
-    if feat == 'employment_status':
-        bar_colors.append('#95a5a6')  # gray for mediated/ambiguous
-    elif c > 0:
-        bar_colors.append('#e74c3c')  # red = risk-increasing
-    else:
-        bar_colors.append('#3498db')  # blue = risk-decreasing
-
-ax.barh(y_pos, coefficients, color=bar_colors, edgecolor='black', linewidth=0.5,
-        xerr=z_critical * std_errors, capsize=4)
-ax.set_yticks(y_pos)
-ax.set_yticklabels(feats_obs, fontsize=11)
-ax.set_xlabel('Coefficient (standardised)', fontsize=12)
-ax.set_title('Causal LR Coefficients with 95% CIs\n'
-             'Signs match causal DAG (employment mediated through income)',
-             fontweight='bold')
-ax.axvline(x=0, color='black', linewidth=0.8)
-
-# Legend
-risk_up  = mpatches.Patch(color='#e74c3c', label='Risk-increasing (expected +)')
-risk_dn  = mpatches.Patch(color='#3498db', label='Risk-decreasing (expected -)')
-mediated = mpatches.Patch(color='#95a5a6', label='Mediated (CI includes 0)')
-ax.legend(handles=[risk_dn, risk_up, mediated], fontsize=9, loc='lower right')
-
-plt.tight_layout()
-fig.savefig(REPORTS_DIR / 'causal_lr_coefficients.png', dpi=150, bbox_inches='tight')
-plt.close()
-print(f"\n  Saved: reports/causal_lr_coefficients.png")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 8: Correlation Heatmap
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 8: Correlation Analysis")
-print("=" * 65)
-
-fig, axes = plt.subplots(1, 2, figsize=(18, 7))
-
-# Correlations with default (bar chart) - train
-key_cols = feats_obs + ['dark_mode_user']
-corr_train = train[key_cols + ['default']].corr()['default'].drop('default').sort_values()
-bar_colors = ['#e74c3c' if x > 0 else '#3498db' for x in corr_train.values]
-bar_edge = ['#c0392b' if c in SPURIOUS_COLS else '#2c3e50' for c in corr_train.index]
-corr_train.plot(kind='barh', color=bar_colors, ax=axes[0], edgecolor=bar_edge, linewidth=1.2)
-axes[0].set_title('Correlations with Default (Training)', fontweight='bold')
-axes[0].set_xlabel('Pearson Correlation')
-axes[0].axvline(x=0, color='black', linewidth=0.8)
-
-# Spurious reversal: train vs recession
-spurious_corr_train = [train[c].corr(train['default'].astype(float)) for c in SPURIOUS_COLS]
-spurious_corr_rec   = [test_recession[c].corr(test_recession['default'].astype(float)) for c in SPURIOUS_COLS]
-
-x_pos = np.arange(len(SPURIOUS_COLS))
-width = 0.35
-axes[1].bar(x_pos - width/2, spurious_corr_train, width, label='Normal', color='#2ecc71', edgecolor='white')
-axes[1].bar(x_pos + width/2, spurious_corr_rec, width, label='Recession', color='#e74c3c', edgecolor='white')
-axes[1].set_xticks(x_pos)
-axes[1].set_xticklabels([c.replace('_', '\n') for c in SPURIOUS_COLS], fontsize=8)
-axes[1].set_ylabel('Correlation with Default')
-axes[1].set_title('Spurious Correlations REVERSE in Recession', fontweight='bold')
-axes[1].axhline(y=0, color='black', linewidth=0.8)
-axes[1].legend()
-
-plt.tight_layout()
-fig.savefig(REPORTS_DIR / 'correlation_analysis.png', dpi=150, bbox_inches='tight')
-plt.close()
-print(f"  Saved: reports/correlation_analysis.png")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 9: ROC Curves (Normal + Recession)
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 9: ROC Curves")
-print("=" * 65)
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-# Normal ROC
-for name, probs, auc, color in [
-    ('GBM-All', prob_xgb_norm, auc_xgb_norm, '#e74c3c'),
-    ('Causal-LR (obs)', prob_obs_norm, auc_obs_norm, '#2ecc71'),
-    ('Causal-LR (beh)', prob_beh_norm, auc_beh_norm, '#3498db'),
-]:
-    fpr, tpr, _ = roc_curve(y_test_norm, probs)
-    axes[0].plot(fpr, tpr, label=f'{name} (AUC={auc:.4f})', color=color, lw=2)
-axes[0].plot([0,1],[0,1],'k--',lw=1)
-axes[0].set_title('ROC Curves - Normal Conditions', fontweight='bold')
-axes[0].set_xlabel('FPR'); axes[0].set_ylabel('TPR')
-axes[0].legend(fontsize=9); axes[0].grid(True, alpha=0.3)
-
-# Recession ROC
-for name, probs, auc, color in [
-    ('GBM-All', prob_xgb_rec, auc_xgb_rec, '#e74c3c'),
-    ('Causal-LR (obs)', prob_obs_rec, auc_obs_rec, '#2ecc71'),
-    ('Causal-LR (beh)', prob_beh_rec, auc_beh_rec, '#3498db'),
-]:
-    fpr, tpr, _ = roc_curve(y_test_rec, probs)
-    axes[1].plot(fpr, tpr, label=f'{name} (AUC={auc:.4f})', color=color, lw=2)
-axes[1].plot([0,1],[0,1],'k--',lw=1)
-axes[1].set_title('ROC Curves - RECESSION Conditions', fontweight='bold')
-axes[1].set_xlabel('FPR'); axes[1].set_ylabel('TPR')
-axes[1].legend(fontsize=9); axes[1].grid(True, alpha=0.3)
-
-plt.tight_layout()
-fig.savefig(REPORTS_DIR / 'roc_curves_comparison.png', dpi=150, bbox_inches='tight')
-plt.close()
-print(f"  Saved: reports/roc_curves_comparison.png")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 10: THE "WOW" CHART — reports/recession_test.png
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 10: Generating The 'Wow' Chart")
-print("=" * 65)
-
-fig, ax = plt.subplots(figsize=(14, 8))
-
-models_list = ['GBM-All\n(Black-Box)', 'Causal-LR\n(Observable)', 'Causal-LR\n(Behavioural)']
-normal_aucs = [auc_xgb_norm, auc_obs_norm, auc_beh_norm]
-recession_aucs = [auc_xgb_rec, auc_obs_rec, auc_beh_rec]
-
-x = np.arange(len(models_list))
-width = 0.30
-
-bars1 = ax.bar(x - width/2, normal_aucs, width, label='Normal Conditions',
-               color='#2ecc71', edgecolor='#1a9c4e', linewidth=1.5, zorder=3, alpha=0.9)
-bars2 = ax.bar(x + width/2, recession_aucs, width, label='Recession Conditions',
-               color='#e74c3c', edgecolor='#c0392b', linewidth=1.5, zorder=3, alpha=0.9)
-
-# Value labels
-for bar, val in zip(bars1, normal_aucs):
-    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
-            f'{val:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=12)
-for bar, val in zip(bars2, recession_aucs):
-    txt_color = '#c0392b' if val < 0.5 else '#2c3e50'
-    ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
-            f'{val:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=12,
-            color=txt_color)
-
-# Dramatic annotations
-if auc_xgb_rec < 0.5:
-    ax.annotate('COLLAPSE!',
-                xy=(x[0] + width/2, recession_aucs[0]),
-                xytext=(x[0] + width/2 + 0.3, recession_aucs[0] + 0.15),
-                fontsize=15, fontweight='bold', color='#c0392b',
-                arrowprops=dict(arrowstyle='->', color='#c0392b', lw=2.5))
-
-ax.annotate('STABLE',
-            xy=(x[1] + width/2, recession_aucs[1]),
-            xytext=(x[1] + width/2 + 0.3, recession_aucs[1] - 0.10),
-            fontsize=14, fontweight='bold', color='#27ae60',
-            arrowprops=dict(arrowstyle='->', color='#27ae60', lw=2.5))
-
-ax.annotate('STABLE',
-            xy=(x[2] + width/2, recession_aucs[2]),
-            xytext=(x[2] + width/2 + 0.3, recession_aucs[2] - 0.10),
-            fontsize=14, fontweight='bold', color='#27ae60',
-            arrowprops=dict(arrowstyle='->', color='#27ae60', lw=2.5))
-
-# Random chance line
-ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1.2, alpha=0.7,
-           label='Random Chance (AUC=0.5)')
-
-ax.set_ylabel('AUC Score', fontsize=14, fontweight='bold')
-ax.set_title('Black-Box Breaks, Causal Holds\n'
-             'Model Performance: Normal vs. Recession Conditions',
-             fontsize=18, fontweight='bold', pad=20)
-ax.set_xticks(x)
-ax.set_xticklabels(models_list, fontsize=13)
-ax.set_ylim(0, 1.15)
-ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
-ax.grid(axis='y', alpha=0.3, zorder=0)
-
-# Key takeaway box
-xgb_drop = auc_xgb_norm - auc_xgb_rec
-obs_drop = auc_obs_norm - auc_obs_rec
-beh_drop = auc_beh_norm - auc_beh_rec
-textstr = (f'GBM-All:    {auc_xgb_norm:.3f} -> {auc_xgb_rec:.3f} (dropped {xgb_drop:.3f})\n'
-           f'Causal-Obs: {auc_obs_norm:.3f} -> {auc_obs_rec:.3f} (dropped {abs(obs_drop):.3f})\n'
-           f'Causal-Beh: {auc_beh_norm:.3f} -> {auc_beh_rec:.3f} (dropped {abs(beh_drop):.3f})')
-props = dict(boxstyle='round,pad=0.5', facecolor='lightyellow', alpha=0.8,
-             edgecolor='#2c3e50', linewidth=1.5)
-ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10,
-        verticalalignment='top', bbox=props, family='monospace')
-
-plt.tight_layout()
-fig.savefig(REPORTS_DIR / 'recession_test.png', dpi=200, bbox_inches='tight')
-plt.close()
-print(f"  Saved: reports/recession_test.png")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 11: Spurious Reversal Verification
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  STEP 11: Spurious Correlation Reversal Check")
-print("=" * 65)
-
-print(f"\n  {'Variable':<28} {'Train':>8} {'Normal':>8} {'Recession':>10} {'Reversed':>10}")
-print("  " + "-" * 68)
-all_reversed = True
-for col in SPURIOUS_COLS:
-    ct = train[col].corr(train['default'].astype(float))
-    cn = test_normal[col].corr(test_normal['default'].astype(float))
-    cr = test_recession[col].corr(test_recession['default'].astype(float))
-    rev = ct * cr < 0
-    if not rev:
-        all_reversed = False
-    print(f"  {col:<28} {ct:>+8.3f} {cn:>+8.3f} {cr:>+10.3f} {'YES' if rev else 'NO':>10}")
-print(f"\n  All 6 reversed: {'YES' if all_reversed else 'NO'}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FINAL SUMMARY
-# ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "=" * 65)
-print("  WEEK 1 COMPLETE - FINAL VERIFICATION")
-print("=" * 65)
-
-checks = []
-
-# Check 1: XGBoost Normal AUC > 0.95
-c1 = auc_xgb_norm > 0.95
-checks.append(("GBM Normal AUC > 0.95", c1, f"{auc_xgb_norm:.4f}"))
-
-# Check 2: XGBoost Recession AUC < 0.45
-c2 = auc_xgb_rec < 0.50  # using 0.50 as even more dramatic
-checks.append(("GBM Recession AUC < 0.50", c2, f"{auc_xgb_rec:.4f}"))
-
-# Check 3: Causal LR Normal AUC 0.83-0.88
-c3 = 0.80 <= auc_obs_norm
-checks.append(("Causal-LR Normal AUC >= 0.80", c3, f"{auc_obs_norm:.4f}"))
-
-# Check 4: Causal LR Recession AUC > 0.83
-c4 = auc_obs_rec > 0.80
-checks.append(("Causal-LR Recession AUC > 0.80", c4, f"{auc_obs_rec:.4f}"))
-
-# Check 5: All spurious reversed
-checks.append(("All 6 spurious reversed", all_reversed, f"{'YES' if all_reversed else 'NO'}"))
-
-# Check 6: Models saved
-c6 = all((MODELS_DIR / f).exists() for f in
-         ['xgboost_model.pkl', 'causal_lr_model.pkl', 'causal_lr_behavioural_model.pkl'])
-checks.append(("Models saved", c6, "All 3 models"))
-
-# Check 7: Charts saved
-c7 = (REPORTS_DIR / 'recession_test.png').exists()
-checks.append(("Recession chart saved", c7, "reports/recession_test.png"))
-
-
-print()
-all_pass = True
-for name, passed, detail in checks:
-    status = "PASS" if passed else "FAIL"
-    emoji = "[OK]" if passed else "[!!]"
-    if not passed:
-        all_pass = False
-    print(f"  {emoji} {status}: {name} = {detail}")
-
-print("\n  " + ("ALL CHECKS PASSED!" if all_pass else "SOME CHECKS FAILED - review above"))
-
-# Realism caveat
-print(f"\n  REALISM NOTE:")
-print(f"  The Causal-LR shows near-zero degradation ({abs(auc_obs_norm - auc_obs_rec):.4f}).")
-print(f"  This reflects the synthetic nature of the experiment: the causal")
-print(f"  feature set perfectly captures the DGP structural equations.")
-print(f"  In production, expect 2-5% degradation due to model misspecification,")
-print(f"  unmeasured confounders, and non-stationary causal relationships.")
-print(f"  However, the KEY INSIGHT holds: causal features degrade gracefully")
-print(f"  (single-digit %) while spurious features fail catastrophically (50%+).")
-print("=" * 65)
+    ]
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 2: Train GBM-All (The Villain) with GridSearchCV
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 2: Training GBM-All (The Villain) — GridSearchCV")
+    print("=" * 65)
+
+    feats_xgb = FEATURE_SETS['xgboost_all']
+
+    # Handle class imbalance with sample_weight
+    n_pos = y_train.sum()
+    n_neg = len(y_train) - n_pos
+    sample_weight = np.where(y_train == 1, n_neg / n_pos, 1.0)
+
+    # GridSearchCV to tune hyperparameters (spec requirement)
+    param_grid = {
+        'max_depth': [3, 5],
+        'learning_rate': [0.01, 0.1],
+        'n_estimators': [100, 200],
+    }
+    gbm_base = GradientBoostingClassifier(
+        subsample=0.8, random_state=42,
+    )
+    grid = GridSearchCV(
+        gbm_base, param_grid, cv=5, scoring='roc_auc',
+        n_jobs=-1, verbose=0, refit=True,
+    )
+    grid.fit(X_train[feats_xgb], y_train, sample_weight=sample_weight)
+    booster = grid.best_estimator_
+
+    print(f"  Best params:   {grid.best_params_}")
+    print(f"  Best CV AUC:   {grid.best_score_:.4f}")
+
+    # 5-fold CV on best model (for reporting)
+    cv_scores_gbm = cross_val_score(booster, X_train[feats_xgb], y_train, cv=5, scoring='roc_auc')
+    print(f"  5-Fold CV AUC: {cv_scores_gbm.mean():.4f} +/- {cv_scores_gbm.std():.4f}")
+
+    # Normal evaluation
+    prob_xgb_norm = booster.predict_proba(X_test_norm[feats_xgb])[:, 1]
+    auc_xgb_norm  = roc_auc_score(y_test_norm, prob_xgb_norm)
+
+    # Recession evaluation
+    prob_xgb_rec  = booster.predict_proba(X_test_rec[feats_xgb])[:, 1]
+    auc_xgb_rec   = roc_auc_score(y_test_rec, prob_xgb_rec)
+
+    print(f"  Normal AUC:    {auc_xgb_norm:.4f}")
+    print(f"  Recession AUC: {auc_xgb_rec:.4f}")
+    print(f"  Delta:         {auc_xgb_rec - auc_xgb_norm:+.4f}")
+
+    # Save model
+    joblib.dump(booster, MODELS_DIR / "xgboost_model.pkl")
+    print(f"  Saved: models/xgboost_model.pkl")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 3: Train Causal-LR Observable (The Hero)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 3: Training Causal-LR Observable (The Hero)")
+    print("=" * 65)
+
+    feats_obs = FEATURE_SETS['causal_lr_observable']
+
+    lr_obs = Pipeline([
+        ('scaler', StandardScaler()),
+        ('lr', LogisticRegression(penalty='l2', C=1.0, max_iter=1000, random_state=42)),
+    ])
+
+    # 5-fold CV
+    cv_scores_obs = cross_val_score(lr_obs, X_train[feats_obs], y_train, cv=5, scoring='roc_auc')
+    print(f"  5-Fold CV AUC: {cv_scores_obs.mean():.4f} +/- {cv_scores_obs.std():.4f}")
+
+    lr_obs.fit(X_train[feats_obs], y_train)
+
+    # Normal evaluation
+    prob_obs_norm = lr_obs.predict_proba(X_test_norm[feats_obs])[:, 1]
+    auc_obs_norm  = roc_auc_score(y_test_norm, prob_obs_norm)
+
+    # Recession evaluation
+    prob_obs_rec  = lr_obs.predict_proba(X_test_rec[feats_obs])[:, 1]
+    auc_obs_rec   = roc_auc_score(y_test_rec, prob_obs_rec)
+
+    print(f"  Normal AUC:    {auc_obs_norm:.4f}")
+    print(f"  Recession AUC: {auc_obs_rec:.4f}")
+    print(f"  Delta:         {auc_obs_rec - auc_obs_norm:+.4f}")
+
+    # Save model
+    joblib.dump(lr_obs, MODELS_DIR / "causal_lr_model.pkl")
+    print(f"  Saved: models/causal_lr_model.pkl")
+
+    # Export feature names for the API (Day 4 deliverable)
+    import json
+    feature_names_path = MODELS_DIR / "feature_names.json"
+    with open(feature_names_path, 'w') as f:
+        json.dump(feats_obs, f, indent=2)
+    print(f"  Saved: models/feature_names.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 4: Train Causal-LR Behavioural (The Hero+)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 4: Training Causal-LR Behavioural (The Hero+)")
+    print("=" * 65)
+
+    feats_beh = FEATURE_SETS['causal_lr_behavioural']
+
+    lr_beh = Pipeline([
+        ('scaler', StandardScaler()),
+        ('lr', LogisticRegression(penalty='l2', C=1.0, max_iter=1000, random_state=42)),
+    ])
+
+    cv_scores_beh = cross_val_score(lr_beh, X_train[feats_beh], y_train, cv=5, scoring='roc_auc')
+    print(f"  5-Fold CV AUC: {cv_scores_beh.mean():.4f} +/- {cv_scores_beh.std():.4f}")
+
+    lr_beh.fit(X_train[feats_beh], y_train)
+
+    # Normal evaluation
+    prob_beh_norm = lr_beh.predict_proba(X_test_norm[feats_beh])[:, 1]
+    auc_beh_norm  = roc_auc_score(y_test_norm, prob_beh_norm)
+
+    # Recession evaluation
+    prob_beh_rec  = lr_beh.predict_proba(X_test_rec[feats_beh])[:, 1]
+    auc_beh_rec   = roc_auc_score(y_test_rec, prob_beh_rec)
+
+    print(f"  Normal AUC:    {auc_beh_norm:.4f}")
+    print(f"  Recession AUC: {auc_beh_rec:.4f}")
+    print(f"  Delta:         {auc_beh_rec - auc_beh_norm:+.4f}")
+
+    joblib.dump(lr_beh, MODELS_DIR / "causal_lr_behavioural_model.pkl")
+    print(f"  Saved: models/causal_lr_behavioural_model.pkl")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 5: Results Summary Table
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 5: Recession Stress Test Results")
+    print("=" * 65)
+
+    results = pd.DataFrame({
+        'Model': ['GBM-All (Villain)', 'Causal-LR Observable (Hero)', 'Causal-LR Behavioural (Hero+)'],
+        'AUC_Normal': [auc_xgb_norm, auc_obs_norm, auc_beh_norm],
+        'AUC_Recession': [auc_xgb_rec, auc_obs_rec, auc_beh_rec],
+    })
+    results['Delta'] = results['AUC_Recession'] - results['AUC_Normal']
+    results['Stability'] = results['AUC_Recession'].apply(
+        lambda x: 'COLLAPSED' if x < 0.50 else ('DEGRADED' if x < 0.70 else 'STABLE'))
+
+    results.to_csv(REPORTS_DIR / "recession_stress_test_results.csv", index=False)
+
+    print(f"\n  {'Model':<32} {'Normal':>8} {'Recession':>10} {'Delta':>8} {'Status':>10}")
+    print("  " + "-" * 72)
+    for _, row in results.iterrows():
+        print(f"  {row['Model']:<32} {row['AUC_Normal']:>8.4f} {row['AUC_Recession']:>10.4f} "
+              f"{row['Delta']:>+8.4f} {row['Stability']:>10}")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 6: SHAP Analysis (GBM)
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 6: SHAP Feature Importance Analysis (GBM)")
+    print("=" * 65)
+
+    import shap
+
+    # --- 6a: Sklearn feature importance (baseline) ---
+    importances = pd.Series(booster.feature_importances_, index=feats_xgb).sort_values(ascending=False)
+
+    print("\n  Sklearn Feature Importance Ranking:")
+    for i, (feat, imp) in enumerate(importances.items(), 1):
+        marker = " <-- SPURIOUS" if feat in SPURIOUS_COLS else ""
+        print(f"  {i:>3}. {feat:<28} {imp:.4f}{marker}")
+
+    spur_in_top3 = sum(1 for f in list(importances.head(3).index) if f in SPURIOUS_COLS)
+    print(f"\n  Spurious features in top-3: {spur_in_top3}/3")
+
+    # --- 6b: SHAP TreeExplainer ---
+    print("\n  Computing SHAP values (TreeExplainer on training data)...")
+    explainer = shap.TreeExplainer(booster)
+    shap_values = explainer.shap_values(X_train[feats_xgb])
+
+    # SHAP mean absolute values (global importance)
+    shap_importance = pd.Series(
+        np.abs(shap_values).mean(axis=0), index=feats_xgb
+    ).sort_values(ascending=False)
+
+    print("\n  SHAP Mean |SHAP Value| Ranking:")
+    for i, (feat, val) in enumerate(shap_importance.items(), 1):
+        marker = " <-- SPURIOUS" if feat in SPURIOUS_COLS else ""
+        print(f"  {i:>3}. {feat:<28} {val:.4f}{marker}")
+
+    spur_in_shap_top3 = sum(1 for f in list(shap_importance.head(3).index) if f in SPURIOUS_COLS)
+    print(f"\n  Spurious features in SHAP top-3: {spur_in_shap_top3}/3")
+    print(f"  dark_mode_user SHAP rank: {list(shap_importance.index).index('dark_mode_user') + 1}")
+
+    # --- 6c: SHAP Beeswarm Plot ---
+    print("  Generating SHAP beeswarm plot...")
+    fig, ax = plt.subplots(figsize=(12, 9))
+    shap.summary_plot(
+        shap_values, X_train[feats_xgb],
+        show=False, plot_size=(12, 9),
+        max_display=22,
+    )
+    plt.title('SHAP Beeswarm Plot — GBM-All\nSpurious features drive predictions!',
+              fontweight='bold', fontsize=14, pad=15)
+    plt.tight_layout()
+    plt.savefig(REPORTS_DIR / 'shap_beeswarm_gbm.png', dpi=150, bbox_inches='tight')
+    plt.close('all')
+    print(f"  Saved: reports/shap_beeswarm_gbm.png")
+
+    # --- 6d: SHAP Bar Plot (color-coded) ---
+    fig, ax = plt.subplots(figsize=(10, 9))
+    shap_sorted = shap_importance.sort_values()
+    colors = ['#e74c3c' if f in SPURIOUS_COLS else '#3498db' for f in shap_sorted.index]
+    ax.barh(range(len(shap_sorted)), shap_sorted.values, color=colors, edgecolor='white', linewidth=0.5)
+    ax.set_yticks(range(len(shap_sorted)))
+    ax.set_yticklabels(shap_sorted.index, fontsize=10)
+    causal_patch  = mpatches.Patch(color='#3498db', label='Causal / Observable Feature')
+    spurious_patch = mpatches.Patch(color='#e74c3c', label='Spurious Feature (reverses in recession)')
+    ax.legend(handles=[causal_patch, spurious_patch], fontsize=10, loc='lower right')
+    ax.set_title('SHAP Feature Importance (mean |SHAP value|)\nGBM relies heavily on spurious features!',
+                 fontweight='bold', fontsize=14)
+    ax.set_xlabel('Mean |SHAP Value|', fontsize=12)
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'shap_bar_gbm.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: reports/shap_bar_gbm.png")
+
+    # --- 6e: Legacy feature importance plot (kept for compatibility) ---
+    fig, ax = plt.subplots(figsize=(10, 9))
+    imp_sorted = importances.sort_values()
+    colors_fi = ['#e74c3c' if f in SPURIOUS_COLS else '#3498db' for f in imp_sorted.index]
+    imp_sorted.plot(kind='barh', ax=ax, color=colors_fi, edgecolor='white', linewidth=0.5)
+    ax.legend(handles=[causal_patch, spurious_patch], fontsize=10, loc='lower right')
+    ax.set_title('GBM-All Feature Importances (sklearn)\nSpurious features are prominently used!', fontweight='bold')
+    ax.set_xlabel('Importance', fontsize=12)
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'feature_importance_gbm.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: reports/feature_importance_gbm.png")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 7: Causal-LR Coefficient Extraction with CIs
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 7: Causal-LR Coefficients with 95% CIs")
+    print("=" * 65)
+
+    lr_model = lr_obs.named_steps['lr']
+    scaler_obj = lr_obs.named_steps['scaler']
+    coefficients = lr_model.coef_[0]
+    intercept = lr_model.intercept_[0]
+
+    # Compute standard errors
+    X_scaled = scaler_obj.transform(X_train[feats_obs])
+    probs = lr_obs.predict_proba(X_train[feats_obs])[:, 1]
+    W = probs * (1 - probs)
+    XW = X_scaled.T * W
+    hessian = XW @ X_scaled
+    try:
+        cov_matrix = np.linalg.inv(hessian)
+        std_errors = np.sqrt(np.diag(cov_matrix))
+    except np.linalg.LinAlgError:
+        std_errors = np.zeros(len(coefficients))
+
+    z_critical = stats.norm.ppf(0.975)
+
+    # employment_status expected sign is 'Negative' in isolation, but its direct
+    # causal effect is mediated through income_mean and utility_rate. Once those
+    # are in the model, employment's residual coefficient may be near-zero or
+    # slightly positive (multicollinearity). This is statistically correct.
+    expected_signs = {
+        'income_mean': 'Negative',
+        'income_cv': 'Positive',
+        'utility_rate': 'Negative',
+        'dti_final': 'Positive',
+        'employment_status': 'Either',   # mediated effect — see note below
+        'shock_total': 'Positive',
+    }
+
+    print(f"\n  {'Feature':<24} {'Coef':>8} {'SE':>8} {'95% CI':>22} {'Expected':>10} {'Match':>6}")
+    print("  " + "-" * 82)
+
+    coef_data = []
+    for feat, coef, se in zip(feats_obs, coefficients, std_errors):
+        ci_lo = coef - z_critical * se
+        ci_hi = coef + z_critical * se
+        exp_sign = expected_signs[feat]
+        actual_sign = 'Positive' if coef > 0 else 'Negative'
+        if exp_sign == 'Either':
+            # employment is a mediated variable — CI spanning 0 is fine
+            includes_zero = ci_lo <= 0 <= ci_hi
+            match = 'OK*' if includes_zero else ('YES' if actual_sign == 'Negative' else 'OK*')
+        else:
+            match = 'YES' if actual_sign == exp_sign else 'NO'
+        print(f"  {feat:<24} {coef:>+8.4f} {se:>8.4f} [{ci_lo:>+8.4f}, {ci_hi:>+8.4f}]  {exp_sign:>10} {match:>6}")
+        coef_data.append({'feature': feat, 'coefficient': coef, 'std_error': se,
+                          'ci_lower': ci_lo, 'ci_upper': ci_hi, 'expected_sign': exp_sign, 'match': match})
+
+    print(f"  {'intercept':<24} {intercept:>+8.4f}")
+
+    # Note on employment_status
+    print(f"\n  NOTE on employment_status:")
+    print(f"  The coefficient is near-zero because employment's causal effect on")
+    print(f"  default is MEDIATED through income_mean and utility_rate (both already")
+    print(f"  in the model). The 95% CI spans zero, confirming the residual effect")
+    print(f"  is not statistically significant — this is expected multicollinearity,")
+    print(f"  NOT a broken causal structure. Employment remains in the model because")
+    print(f"  it is causally valid and adds marginal stability.")
+
+    pd.DataFrame(coef_data).to_csv(REPORTS_DIR / "causal_lr_coefficients.csv", index=False)
+
+    # Coefficient plot
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    y_pos = range(len(feats_obs))
+    bar_colors = []
+    for feat, c in zip(feats_obs, coefficients):
+        if feat == 'employment_status':
+            bar_colors.append('#95a5a6')  # gray for mediated/ambiguous
+        elif c > 0:
+            bar_colors.append('#e74c3c')  # red = risk-increasing
+        else:
+            bar_colors.append('#3498db')  # blue = risk-decreasing
+
+    ax.barh(y_pos, coefficients, color=bar_colors, edgecolor='black', linewidth=0.5,
+            xerr=z_critical * std_errors, capsize=4)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(feats_obs, fontsize=11)
+    ax.set_xlabel('Coefficient (standardised)', fontsize=12)
+    ax.set_title('Causal LR Coefficients with 95% CIs\n'
+                 'Signs match causal DAG (employment mediated through income)',
+                 fontweight='bold')
+    ax.axvline(x=0, color='black', linewidth=0.8)
+
+    # Legend
+    risk_up  = mpatches.Patch(color='#e74c3c', label='Risk-increasing (expected +)')
+    risk_dn  = mpatches.Patch(color='#3498db', label='Risk-decreasing (expected -)')
+    mediated = mpatches.Patch(color='#95a5a6', label='Mediated (CI includes 0)')
+    ax.legend(handles=[risk_dn, risk_up, mediated], fontsize=9, loc='lower right')
+
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'causal_lr_coefficients.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"\n  Saved: reports/causal_lr_coefficients.png")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 8: Correlation Heatmap
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 8: Correlation Analysis")
+    print("=" * 65)
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+    # Correlations with default (bar chart) - train
+    key_cols = feats_obs + ['dark_mode_user']
+    corr_train = train[key_cols + ['default']].corr()['default'].drop('default').sort_values()
+    bar_colors = ['#e74c3c' if x > 0 else '#3498db' for x in corr_train.values]
+    bar_edge = ['#c0392b' if c in SPURIOUS_COLS else '#2c3e50' for c in corr_train.index]
+    corr_train.plot(kind='barh', color=bar_colors, ax=axes[0], edgecolor=bar_edge, linewidth=1.2)
+    axes[0].set_title('Correlations with Default (Training)', fontweight='bold')
+    axes[0].set_xlabel('Pearson Correlation')
+    axes[0].axvline(x=0, color='black', linewidth=0.8)
+
+    # Spurious reversal: train vs recession
+    spurious_corr_train = [train[c].corr(train['default'].astype(float)) for c in SPURIOUS_COLS]
+    spurious_corr_rec   = [test_recession[c].corr(test_recession['default'].astype(float)) for c in SPURIOUS_COLS]
+
+    x_pos = np.arange(len(SPURIOUS_COLS))
+    width = 0.35
+    axes[1].bar(x_pos - width/2, spurious_corr_train, width, label='Normal', color='#2ecc71', edgecolor='white')
+    axes[1].bar(x_pos + width/2, spurious_corr_rec, width, label='Recession', color='#e74c3c', edgecolor='white')
+    axes[1].set_xticks(x_pos)
+    axes[1].set_xticklabels([c.replace('_', '\n') for c in SPURIOUS_COLS], fontsize=8)
+    axes[1].set_ylabel('Correlation with Default')
+    axes[1].set_title('Spurious Correlations REVERSE in Recession', fontweight='bold')
+    axes[1].axhline(y=0, color='black', linewidth=0.8)
+    axes[1].legend()
+
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'correlation_analysis.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: reports/correlation_analysis.png")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 9: ROC Curves (Normal + Recession)
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 9: ROC Curves")
+    print("=" * 65)
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Normal ROC
+    for name, probs, auc, color in [
+        ('GBM-All', prob_xgb_norm, auc_xgb_norm, '#e74c3c'),
+        ('Causal-LR (obs)', prob_obs_norm, auc_obs_norm, '#2ecc71'),
+        ('Causal-LR (beh)', prob_beh_norm, auc_beh_norm, '#3498db'),
+    ]:
+        fpr, tpr, _ = roc_curve(y_test_norm, probs)
+        axes[0].plot(fpr, tpr, label=f'{name} (AUC={auc:.4f})', color=color, lw=2)
+    axes[0].plot([0,1],[0,1],'k--',lw=1)
+    axes[0].set_title('ROC Curves - Normal Conditions', fontweight='bold')
+    axes[0].set_xlabel('FPR'); axes[0].set_ylabel('TPR')
+    axes[0].legend(fontsize=9); axes[0].grid(True, alpha=0.3)
+
+    # Recession ROC
+    for name, probs, auc, color in [
+        ('GBM-All', prob_xgb_rec, auc_xgb_rec, '#e74c3c'),
+        ('Causal-LR (obs)', prob_obs_rec, auc_obs_rec, '#2ecc71'),
+        ('Causal-LR (beh)', prob_beh_rec, auc_beh_rec, '#3498db'),
+    ]:
+        fpr, tpr, _ = roc_curve(y_test_rec, probs)
+        axes[1].plot(fpr, tpr, label=f'{name} (AUC={auc:.4f})', color=color, lw=2)
+    axes[1].plot([0,1],[0,1],'k--',lw=1)
+    axes[1].set_title('ROC Curves - RECESSION Conditions', fontweight='bold')
+    axes[1].set_xlabel('FPR'); axes[1].set_ylabel('TPR')
+    axes[1].legend(fontsize=9); axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'roc_curves_comparison.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: reports/roc_curves_comparison.png")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 10: THE "WOW" CHART — reports/recession_test.png
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 10: Generating The 'Wow' Chart")
+    print("=" * 65)
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    models_list = ['GBM-All\n(Black-Box)', 'Causal-LR\n(Observable)', 'Causal-LR\n(Behavioural)']
+    normal_aucs = [auc_xgb_norm, auc_obs_norm, auc_beh_norm]
+    recession_aucs = [auc_xgb_rec, auc_obs_rec, auc_beh_rec]
+
+    x = np.arange(len(models_list))
+    width = 0.30
+
+    bars1 = ax.bar(x - width/2, normal_aucs, width, label='Normal Conditions',
+                   color='#2ecc71', edgecolor='#1a9c4e', linewidth=1.5, zorder=3, alpha=0.9)
+    bars2 = ax.bar(x + width/2, recession_aucs, width, label='Recession Conditions',
+                   color='#e74c3c', edgecolor='#c0392b', linewidth=1.5, zorder=3, alpha=0.9)
+
+    # Value labels
+    for bar, val in zip(bars1, normal_aucs):
+        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
+                f'{val:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=12)
+    for bar, val in zip(bars2, recession_aucs):
+        txt_color = '#c0392b' if val < 0.5 else '#2c3e50'
+        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
+                f'{val:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=12,
+                color=txt_color)
+
+    # Dramatic annotations
+    if auc_xgb_rec < 0.5:
+        ax.annotate('COLLAPSE!',
+                    xy=(x[0] + width/2, recession_aucs[0]),
+                    xytext=(x[0] + width/2 + 0.3, recession_aucs[0] + 0.15),
+                    fontsize=15, fontweight='bold', color='#c0392b',
+                    arrowprops=dict(arrowstyle='->', color='#c0392b', lw=2.5))
+
+    ax.annotate('STABLE',
+                xy=(x[1] + width/2, recession_aucs[1]),
+                xytext=(x[1] + width/2 + 0.3, recession_aucs[1] - 0.10),
+                fontsize=14, fontweight='bold', color='#27ae60',
+                arrowprops=dict(arrowstyle='->', color='#27ae60', lw=2.5))
+
+    ax.annotate('STABLE',
+                xy=(x[2] + width/2, recession_aucs[2]),
+                xytext=(x[2] + width/2 + 0.3, recession_aucs[2] - 0.10),
+                fontsize=14, fontweight='bold', color='#27ae60',
+                arrowprops=dict(arrowstyle='->', color='#27ae60', lw=2.5))
+
+    # Random chance line
+    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1.2, alpha=0.7,
+               label='Random Chance (AUC=0.5)')
+
+    ax.set_ylabel('AUC Score', fontsize=14, fontweight='bold')
+    ax.set_title('Black-Box Breaks, Causal Holds\n'
+                 'Model Performance: Normal vs. Recession Conditions',
+                 fontsize=18, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(models_list, fontsize=13)
+    ax.set_ylim(0, 1.15)
+    ax.legend(loc='upper right', fontsize=11, framealpha=0.9)
+    ax.grid(axis='y', alpha=0.3, zorder=0)
+
+    # Key takeaway box
+    xgb_drop = auc_xgb_norm - auc_xgb_rec
+    obs_drop = auc_obs_norm - auc_obs_rec
+    beh_drop = auc_beh_norm - auc_beh_rec
+    textstr = (f'GBM-All:    {auc_xgb_norm:.3f} -> {auc_xgb_rec:.3f} (dropped {xgb_drop:.3f})\n'
+               f'Causal-Obs: {auc_obs_norm:.3f} -> {auc_obs_rec:.3f} (dropped {abs(obs_drop):.3f})\n'
+               f'Causal-Beh: {auc_beh_norm:.3f} -> {auc_beh_rec:.3f} (dropped {abs(beh_drop):.3f})')
+    props = dict(boxstyle='round,pad=0.5', facecolor='lightyellow', alpha=0.8,
+                 edgecolor='#2c3e50', linewidth=1.5)
+    ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', bbox=props, family='monospace')
+
+    plt.tight_layout()
+    fig.savefig(REPORTS_DIR / 'recession_test.png', dpi=200, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: reports/recession_test.png")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # STEP 11: Spurious Reversal Verification
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  STEP 11: Spurious Correlation Reversal Check")
+    print("=" * 65)
+
+    print(f"\n  {'Variable':<28} {'Train':>8} {'Normal':>8} {'Recession':>10} {'Reversed':>10}")
+    print("  " + "-" * 68)
+    all_reversed = True
+    for col in SPURIOUS_COLS:
+        ct = train[col].corr(train['default'].astype(float))
+        cn = test_normal[col].corr(test_normal['default'].astype(float))
+        cr = test_recession[col].corr(test_recession['default'].astype(float))
+        rev = ct * cr < 0
+        if not rev:
+            all_reversed = False
+        print(f"  {col:<28} {ct:>+8.3f} {cn:>+8.3f} {cr:>+10.3f} {'YES' if rev else 'NO':>10}")
+    print(f"\n  All 6 reversed: {'YES' if all_reversed else 'NO'}")
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # FINAL SUMMARY
+    # ══════════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 65)
+    print("  WEEK 1 COMPLETE - FINAL VERIFICATION")
+    print("=" * 65)
+
+    checks = []
+
+    # Check 1: XGBoost Normal AUC > 0.95
+    c1 = auc_xgb_norm > 0.95
+    checks.append(("GBM Normal AUC > 0.95", c1, f"{auc_xgb_norm:.4f}"))
+
+    # Check 2: XGBoost Recession AUC < 0.45
+    c2 = auc_xgb_rec < 0.50  # using 0.50 as even more dramatic
+    checks.append(("GBM Recession AUC < 0.50", c2, f"{auc_xgb_rec:.4f}"))
+
+    # Check 3: Causal LR Normal AUC 0.83-0.88
+    c3 = 0.80 <= auc_obs_norm
+    checks.append(("Causal-LR Normal AUC >= 0.80", c3, f"{auc_obs_norm:.4f}"))
+
+    # Check 4: Causal LR Recession AUC > 0.83
+    c4 = auc_obs_rec > 0.80
+    checks.append(("Causal-LR Recession AUC > 0.80", c4, f"{auc_obs_rec:.4f}"))
+
+    # Check 5: All spurious reversed
+    checks.append(("All 6 spurious reversed", all_reversed, f"{'YES' if all_reversed else 'NO'}"))
+
+    # Check 6: Models saved
+    c6 = all((MODELS_DIR / f).exists() for f in
+             ['xgboost_model.pkl', 'causal_lr_model.pkl', 'causal_lr_behavioural_model.pkl'])
+    checks.append(("Models saved", c6, "All 3 models"))
+
+    # Check 7: Charts saved
+    c7 = (REPORTS_DIR / 'recession_test.png').exists()
+    checks.append(("Recession chart saved", c7, "reports/recession_test.png"))
+
+    # Check 8: SHAP plots saved
+    c8 = (REPORTS_DIR / 'shap_beeswarm_gbm.png').exists()
+    checks.append(("SHAP beeswarm saved", c8, "reports/shap_beeswarm_gbm.png"))
+
+    print()
+    all_pass = True
+    for name, passed, detail in checks:
+        status = "PASS" if passed else "FAIL"
+        emoji = "[OK]" if passed else "[!!]"
+        if not passed:
+            all_pass = False
+        print(f"  {emoji} {status}: {name} = {detail}")
+
+    print("\n  " + ("ALL CHECKS PASSED!" if all_pass else "SOME CHECKS FAILED - review above"))
+
+    # Realism caveat
+    print(f"\n  REALISM NOTE:")
+    print(f"  The Causal-LR shows near-zero degradation ({abs(auc_obs_norm - auc_obs_rec):.4f}).")
+    print(f"  This reflects the synthetic nature of the experiment: the causal")
+    print(f"  feature set perfectly captures the DGP structural equations.")
+    print(f"  In production, expect 2-5% degradation due to model misspecification,")
+    print(f"  unmeasured confounders, and non-stationary causal relationships.")
+    print(f"  However, the KEY INSIGHT holds: causal features degrade gracefully")
+    print(f"  (single-digit %) while spurious features fail catastrophically (50%+).")
+    print("=" * 65)
+
+
+if __name__ == "__main__":
+    main()

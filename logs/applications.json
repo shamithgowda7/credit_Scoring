@@ -1,0 +1,53 @@
+[
+  {
+    "timestamp": "2026-04-28T15:21:41.964698",
+    "demo_user": "Raj Patel",
+    "user_id": 2,
+    "score": 446,
+    "probability": 0.755545,
+    "decision": "NANO_CREDIT",
+    "risk_tier": "High",
+    "ilf_reliability": 0.5074,
+    "ilf_label": "Low",
+    "catch_trial_flagged": false,
+    "latencies": [
+      6.576,
+      10.119,
+      6.717
+    ]
+  },
+  {
+    "timestamp": "2026-04-28T15:21:43.492875",
+    "demo_user": "Raj Patel",
+    "user_id": 2,
+    "score": 446,
+    "probability": 0.755545,
+    "decision": "NANO_CREDIT",
+    "risk_tier": "High",
+    "ilf_reliability": 0.5074,
+    "ilf_label": "Low",
+    "catch_trial_flagged": false,
+    "latencies": [
+      6.576,
+      10.119,
+      6.717
+    ]
+  },
+  {
+    "timestamp": "2026-04-28T15:22:44.708270",
+    "demo_user": "Zara Mbeki",
+    "user_id": 12,
+    "score": 839,
+    "probability": 0.100248,
+    "decision": "STANDARD",
+    "risk_tier": "Low",
+    "ilf_reliability": 0.3259,
+    "ilf_label": "Low",
+    "catch_trial_flagged": true,
+    "latencies": [
+      5.15,
+      2.933,
+      1.757
+    ]
+  }
+]

@@ -1,0 +1,182 @@
+[
+  {
+    "id": 1,
+    "name": "Amara Okonkwo",
+    "risk_tier": "High",
+    "expected_score": 390,
+    "decision": "DECLINE",
+    "features": {
+      "income_mean": 0.025138,
+      "income_cv": 1.815036,
+      "utility_rate": 0.333333,
+      "dti_final": 0.869223,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 2,
+    "name": "Raj Patel",
+    "risk_tier": "High",
+    "expected_score": 446,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.111121,
+      "income_cv": 0.965198,
+      "utility_rate": 0.166667,
+      "dti_final": 0.88503,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 3,
+    "name": "Fatima Al-Sayed",
+    "risk_tier": "High",
+    "expected_score": 408,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.053371,
+      "income_cv": 1.286952,
+      "utility_rate": 0.25,
+      "dti_final": 0.95,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 4,
+    "name": "Chen Wei",
+    "risk_tier": "High",
+    "expected_score": 399,
+    "decision": "DECLINE",
+    "features": {
+      "income_mean": 0.065705,
+      "income_cv": 1.337055,
+      "utility_rate": 0.25,
+      "dti_final": 0.699564,
+      "employment_status": 1.0,
+      "shock_total": 3.0
+    }
+  },
+  {
+    "id": 5,
+    "name": "Priya Sharma",
+    "risk_tier": "Medium",
+    "expected_score": 552,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.1067,
+      "income_cv": 0.770583,
+      "utility_rate": 0.25,
+      "dti_final": 0.82467,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 6,
+    "name": "Kwame Mensah",
+    "risk_tier": "Medium",
+    "expected_score": 553,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.088552,
+      "income_cv": 0.801362,
+      "utility_rate": 0.25,
+      "dti_final": 0.785487,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 7,
+    "name": "Sofia Rodriguez",
+    "risk_tier": "Medium",
+    "expected_score": 634,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.156414,
+      "income_cv": 0.735494,
+      "utility_rate": 0.416667,
+      "dti_final": 0.704859,
+      "employment_status": 1.0,
+      "shock_total": 3.0
+    }
+  },
+  {
+    "id": 8,
+    "name": "Yuki Tanaka",
+    "risk_tier": "Medium",
+    "expected_score": 587,
+    "decision": "NANO_CREDIT",
+    "features": {
+      "income_mean": 0.111759,
+      "income_cv": 0.650579,
+      "utility_rate": 0.25,
+      "dti_final": 0.802721,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  },
+  {
+    "id": 9,
+    "name": "David Kimani",
+    "risk_tier": "Low",
+    "expected_score": 735,
+    "decision": "STANDARD",
+    "features": {
+      "income_mean": 0.138322,
+      "income_cv": 0.607823,
+      "utility_rate": 0.416667,
+      "dti_final": 0.875183,
+      "employment_status": 0.0,
+      "shock_total": 0.0
+    }
+  },
+  {
+    "id": 10,
+    "name": "Lina Nguyen",
+    "risk_tier": "Low",
+    "expected_score": 830,
+    "decision": "STANDARD",
+    "features": {
+      "income_mean": 0.297226,
+      "income_cv": 0.217184,
+      "utility_rate": 0.333333,
+      "dti_final": 0.68254,
+      "employment_status": 0.0,
+      "shock_total": 0.0
+    }
+  },
+  {
+    "id": 11,
+    "name": "Omar Hassan",
+    "risk_tier": "Low",
+    "expected_score": 754,
+    "decision": "STANDARD",
+    "features": {
+      "income_mean": 0.066213,
+      "income_cv": 0.692855,
+      "utility_rate": 0.5,
+      "dti_final": 0.842,
+      "employment_status": 0.0,
+      "shock_total": 0.0
+    }
+  },
+  {
+    "id": 12,
+    "name": "Zara Mbeki",
+    "risk_tier": "Low",
+    "expected_score": 839,
+    "decision": "STANDARD",
+    "features": {
+      "income_mean": 0.273672,
+      "income_cv": 0.566272,
+      "utility_rate": 0.583333,
+      "dti_final": 0.73744,
+      "employment_status": 0.0,
+      "shock_total": 1.0
+    }
+  }
+]

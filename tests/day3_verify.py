@@ -1,6 +1,6 @@
 """Day 3 verification script — mirrors mode_train.ipynb logic."""
 import os, sys, warnings
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
 import numpy as np
@@ -14,6 +14,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Resolve project root (tests/ is one level below project root)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR     = PROJECT_ROOT / "data"
+
 # XGBoost with fallback
 try:
     import xgboost as xgb
@@ -25,8 +29,8 @@ except Exception as e:
     print(f"XGBoost unavailable ({e.__class__.__name__}). Using sklearn GBM.")
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-train = pd.read_csv('temporal_credit_agg_train.csv')
-test  = pd.read_csv('temporal_credit_agg_test.csv')
+train = pd.read_csv(DATA_DIR / 'temporal_credit_agg_train.csv')
+test  = pd.read_csv(DATA_DIR / 'temporal_credit_agg_test.csv')
 print(f"\nTrain: {train.shape}, Test: {test.shape}")
 print(f"Test splits: {test['split'].value_counts().to_dict()}")
 
@@ -106,15 +110,15 @@ auc_beh  = roc_auc_score(y_test_norm, prob_beh)
 print(f"  AUC (normal): {auc_beh:.4f}")
 
 # ── Save results ──────────────────────────────────────────────────────────────
-os.makedirs('results', exist_ok=True)
-os.makedirs('outputs', exist_ok=True)
+REPORTS_DIR = PROJECT_ROOT / "reports"
+REPORTS_DIR.mkdir(exist_ok=True)
 
 results = pd.DataFrame({
     'model':      ['XGBoost-All','Causal-LR (observable)','Causal-LR (behavioural)'],
     'auc_normal': [auc_xgb, auc_obs, auc_beh],
 })
-results.to_csv('results/baseline_auc.csv', index=False)
-print("\nSaved: results/baseline_auc.csv")
+results.to_csv(REPORTS_DIR / 'baseline_auc.csv', index=False)
+print(f"\nSaved: {REPORTS_DIR / 'baseline_auc.csv'}")
 
 # ── ROC Curves ─────────────────────────────────────────────────────────────────
 fig, ax = plt.subplots(figsize=(8, 6))
@@ -129,8 +133,8 @@ ax.plot([0,1],[0,1],'k--',lw=1,label='Random')
 ax.set(xlabel='FPR', ylabel='TPR', title='ROC Curves — Normal Test Set (Day 3 Baseline)')
 ax.legend(fontsize=10); ax.grid(True, alpha=0.3)
 plt.tight_layout()
-fig.savefig('outputs/roc_curves_normal.png', dpi=150)
-print("Saved: outputs/roc_curves_normal.png")
+fig.savefig(REPORTS_DIR / 'roc_curves_normal_baseline.png', dpi=150)
+print(f"Saved: {REPORTS_DIR / 'roc_curves_normal_baseline.png'}")
 plt.close()
 
 # ── Spurious reversal check ────────────────────────────────────────────────────
@@ -151,9 +155,9 @@ for col in spurious_cols:
     print(line)
     log_lines.append(line)
 print(f"\n  All 6 reversed: {'YES' if all_reversed else 'NO'}")
-with open('outputs/spurious_reversal_check.txt', 'w') as f:
+with open(REPORTS_DIR / 'spurious_reversal_check.txt', 'w') as f:
     f.write('\n'.join(log_lines))
-print("Saved: outputs/spurious_reversal_check.txt")
+print(f"Saved: {REPORTS_DIR / 'spurious_reversal_check.txt'}")
 
 # ── Day 3 Summary ─────────────────────────────────────────────────────────────
 expected = {

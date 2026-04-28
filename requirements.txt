@@ -9,3 +9,8 @@ scipy==1.14.0
 joblib==1.4.2
 jupyter==1.0.0
 notebook==7.2.1
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+requests>=2.32.0
+streamlit>=1.36.0
