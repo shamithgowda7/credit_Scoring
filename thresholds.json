@@ -1,0 +1,21 @@
+{
+  "description": "Dynamic score thresholds — read by api/main.py at startup. In production these would be updated by the portfolio feedback loop.",
+  "thresholds": {
+    "DECLINE_UPPER": 400,
+    "NANO_CREDIT_UPPER": 700
+  },
+  "risk_appetite": {
+    "nano_credit_max_default_rate": 0.03,
+    "standard_max_default_rate": 0.01
+  },
+  "adjustment_rules": {
+    "tighten_step": 20,
+    "relax_step": 10,
+    "min_decline_upper": 350,
+    "max_decline_upper": 500,
+    "min_nano_upper": 600,
+    "max_nano_upper": 800
+  },
+  "last_updated": "2026-05-02T00:00:00",
+  "updated_by": "system_init"
+}

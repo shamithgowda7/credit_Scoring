@@ -2,6 +2,7 @@
 FutureBank Credit — Streamlit Lending Application
 ===================================================
 Multi-step lending flow: Welcome -> ILF Questions -> Processing -> Results
+Includes: self-improving feedback (RUD), knowledge-graph context, shadow scoring
 Run: streamlit run app/main.py
 Requires: FastAPI backend running (uvicorn api.main:app)
 """
@@ -177,9 +178,16 @@ def load_demo_users():
             return json.load(f)
     return []
 
-def call_scoring_api(features: dict) -> dict:
+def call_scoring_api(features: dict, user_id: int = None,
+                     prior_loan: dict = None) -> dict:
+    """Call the scoring API with optional RUD and graph context."""
     try:
-        r = requests.post(f"{API_URL}/score", json={"features": features}, timeout=10)
+        payload = {"features": features}
+        if user_id is not None:
+            payload["user_id"] = user_id
+        if prior_loan is not None:
+            payload["prior_loan"] = prior_loan
+        r = requests.post(f"{API_URL}/score", json=payload, timeout=10)
         if r.status_code == 200:
             return r.json()
         return None
@@ -266,6 +274,24 @@ def render_welcome():
         choice = st.selectbox("Choose a profile:", options, key="user_select", label_visibility="collapsed")
         idx = options.index(choice)
         st.session_state.selected_user = users[idx]
+
+    # Prior loan toggle (Self-Improving Feedback Loop)
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown("**🔄 Self-Improving Credit (Prior Loan History)**")
+    has_prior = st.checkbox(
+        "This borrower has a prior loan history",
+        key="prior_loan_check",
+    )
+    if has_prior:
+        pl_col1, pl_col2 = st.columns(2)
+        with pl_col1:
+            repaid = st.checkbox("Prior loan was repaid", value=True, key="prior_repaid")
+        with pl_col2:
+            during_shock = st.checkbox("Repaid during economic shock (RUD)", value=True, key="prior_shock")
+        st.session_state.prior_loan = {"repaid": repaid, "during_shock": during_shock}
+    else:
+        st.session_state.prior_loan = None
+    st.markdown('</div>', unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -360,7 +386,11 @@ def render_processing():
     progress_bar.progress(50)
     user = st.session_state.selected_user
     if user:
-        api_result = call_scoring_api(user["features"])
+        api_result = call_scoring_api(
+            features=user["features"],
+            user_id=user.get("id"),
+            prior_loan=st.session_state.get("prior_loan"),
+        )
     else:
         api_result = None
     time.sleep(0.5)
@@ -453,7 +483,86 @@ def render_results():
             {'<p style="color:#F87171; font-size:0.85rem; margin-top:0.8rem;">&#9888; Catch trial flagged</p>' if caught else ''}
         </div>""", unsafe_allow_html=True)
 
-    # ── Forensic Mode (Why?) ──────────────────────────────────────────────
+    # ── Self-Improving Feedback Badge ───────────────────────────────────
+    imp_notes = result.get("improvement_notes")
+    rud_boost = result.get("rud_boost", 0)
+    if imp_notes:
+        boost_color = "#00E5CC" if rud_boost > 0 else "#F87171"
+        st.markdown(f"""
+        <div class="glass-card-accent" style="text-align:left;">
+            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                <span style="font-size:1.3rem;">🔄</span>
+                <span style="color:#00BFA6; font-weight:700; font-size:1rem;">Self-Improving Credit Loop</span>
+                {f'<span style="background:rgba(0,191,166,0.15);color:#00E5CC;padding:2px 10px;border-radius:20px;font-size:0.8rem;font-weight:600;">+{rud_boost} pts</span>' if rud_boost > 0 else ''}
+            </div>
+            <p style="color:#E8ECF1; font-size:0.9rem; line-height:1.6; margin:0;">{imp_notes}</p>
+        </div>""", unsafe_allow_html=True)
+
+    # ── Knowledge Graph Context Badge ───────────────────────────────────
+    graph_feats = result.get("graph_features")
+    graph_boost = result.get("graph_boost", 0)
+    if graph_feats:
+        gf = graph_feats
+        boost_sign = "+" if graph_boost >= 0 else ""
+        ref_text = f"\u2705 {gf.get('referred_by', '')}" if gf.get('referral_bonus') else "\u2796 None"
+        st.markdown(f"""
+        <div class="glass-card" style="text-align:left;">
+            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.8rem;">
+                <span style="font-size:1.3rem;">📊</span>
+                <span style="color:#00BFA6; font-weight:700; font-size:1rem;">Knowledge Graph Context</span>
+                <span style="background:rgba(0,191,166,0.15);color:#00E5CC;padding:2px 10px;border-radius:20px;font-size:0.8rem;font-weight:600;">{boost_sign}{graph_boost} pts</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.8rem;">
+                <div>
+                    <div style="color:#8899AA; font-size:0.75rem; text-transform:uppercase; letter-spacing:1px;">Employer</div>
+                    <div style="color:#E8ECF1; font-weight:600;">{gf.get('employer_name', 'N/A')}</div>
+                    <div style="color:#8899AA; font-size:0.8rem;">Default rate: {gf.get('employer_default_rate', 0):.0%}</div>
+                </div>
+                <div>
+                    <div style="color:#8899AA; font-size:0.75rem; text-transform:uppercase; letter-spacing:1px;">Community</div>
+                    <div style="color:#E8ECF1; font-weight:600;">{gf.get('community_name', 'N/A')}</div>
+                    <div style="color:#8899AA; font-size:0.8rem;">Trust: {gf.get('community_trust_score', 0):.0%}</div>
+                </div>
+                <div>
+                    <div style="color:#8899AA; font-size:0.75rem; text-transform:uppercase; letter-spacing:1px;">Connections</div>
+                    <div style="color:#E8ECF1; font-weight:600;">Degree {gf.get('graph_degree', 0)}</div>
+                </div>
+                <div>
+                    <div style="color:#8899AA; font-size:0.75rem; text-transform:uppercase; letter-spacing:1px;">Referral</div>
+                    <div style="color:#E8ECF1; font-weight:600;">{ref_text}</div>
+                </div>
+            </div>
+            <div style="margin-top:0.8rem; color:#8899AA; font-size:0.85rem; font-style:italic;">{gf.get('graph_notes', '')}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # ── Shadow Score Comparison (Feature Lab) ─────────────────────────
+    shadow = result.get("shadow_score")
+    shadow_feats = result.get("shadow_features_used")
+    if shadow is not None:
+        diff = shadow - score
+        diff_label = f"+{diff}" if diff >= 0 else str(diff)
+        st.markdown(f"""
+        <div class="glass-card" style="text-align:center;">
+            <div style="display:flex; align-items:center; justify-content:center; gap:0.5rem; margin-bottom:0.5rem;">
+                <span style="font-size:1.1rem;">🧪</span>
+                <span style="color:#8899AA; font-size:0.85rem; text-transform:uppercase; letter-spacing:2px;">Feature Laboratory — Shadow Score</span>
+            </div>
+            <div style="display:flex; justify-content:center; gap:2rem; align-items:baseline;">
+                <div>
+                    <div style="color:#8899AA; font-size:0.7rem; text-transform:uppercase;">Production</div>
+                    <div style="font-size:1.8rem; font-weight:800; color:#00E5CC;">{score}</div>
+                </div>
+                <div style="color:#8899AA; font-size:1.5rem;">vs</div>
+                <div>
+                    <div style="color:#8899AA; font-size:0.7rem; text-transform:uppercase;">Shadow</div>
+                    <div style="font-size:1.8rem; font-weight:800; color:#FBBF24;">{shadow}</div>
+                </div>
+                <div style="background:rgba(245,158,11,0.15);color:#FBBF24;padding:4px 12px;border-radius:20px;font-size:0.85rem;font-weight:600;">Δ {diff_label}</div>
+            </div>
+            <div style="color:#8899AA; font-size:0.8rem; margin-top:0.5rem;">Shadow feature: {', '.join(shadow_feats) if shadow_feats else 'N/A'}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # ── Forensic Mode (Why?) ──────────────────────────────────────────
     with st.expander("Why this decision?", expanded=False):
         st.markdown("#### Feature Contributions")
         st.markdown("Each factor's influence on your credit score:")
@@ -479,6 +588,16 @@ def render_results():
                     </div>
                     <div class="{bar_class}" style="width:{max(width, 8)}%;">{icon} {desc}</div>
                 </div>""", unsafe_allow_html=True)
+
+        # Score breakdown
+        if rud_boost > 0 or graph_boost != 0:
+            st.markdown("---")
+            st.markdown("#### Score Adjustments")
+            if rud_boost > 0:
+                st.markdown(f"- 🔄 **RUD Boost**: +{rud_boost} points (self-improving feedback)")
+            if graph_boost != 0:
+                sign = "+" if graph_boost > 0 else ""
+                st.markdown(f"- 📊 **Graph Context**: {sign}{graph_boost} points (knowledge graph)")
 
         # ILF details
         if ilf:

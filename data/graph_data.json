@@ -1,0 +1,70 @@
+{
+  "description": "Synthetic knowledge graph for the credit-scoring prototype. Nodes represent borrowers, employers, merchants, and communities. Edges encode relationships like employment, utility payments, co-location, and referrals.",
+  "nodes": [
+    {"id": "user_1",  "type": "borrower",  "name": "Amara Okonkwo",    "user_id": 1},
+    {"id": "user_2",  "type": "borrower",  "name": "Raj Patel",         "user_id": 2},
+    {"id": "user_3",  "type": "borrower",  "name": "Fatima Al-Sayed",   "user_id": 3},
+    {"id": "user_4",  "type": "borrower",  "name": "Chen Wei",          "user_id": 4},
+    {"id": "user_5",  "type": "borrower",  "name": "Priya Sharma",      "user_id": 5},
+    {"id": "user_6",  "type": "borrower",  "name": "Kwame Mensah",      "user_id": 6},
+    {"id": "user_7",  "type": "borrower",  "name": "Sofia Rodriguez",   "user_id": 7},
+    {"id": "user_8",  "type": "borrower",  "name": "Yuki Tanaka",       "user_id": 8},
+    {"id": "user_9",  "type": "borrower",  "name": "David Kimani",      "user_id": 9},
+    {"id": "user_10", "type": "borrower",  "name": "Lina Nguyen",       "user_id": 10},
+    {"id": "user_11", "type": "borrower",  "name": "Omar Hassan",       "user_id": 11},
+    {"id": "user_12", "type": "borrower",  "name": "Zara Mbeki",        "user_id": 12},
+
+    {"id": "emp_1",   "type": "employer",  "name": "TechCorp India",     "sector": "technology",   "avg_employee_default_rate": 0.02},
+    {"id": "emp_2",   "type": "employer",  "name": "AgriCo East Africa", "sector": "agriculture",  "avg_employee_default_rate": 0.06},
+    {"id": "emp_3",   "type": "employer",  "name": "GlobalTrade Ltd",    "sector": "import_export", "avg_employee_default_rate": 0.04},
+    {"id": "emp_4",   "type": "employer",  "name": "CityServices LLC",   "sector": "services",     "avg_employee_default_rate": 0.05},
+
+    {"id": "merch_1", "type": "merchant",  "name": "PowerGrid Utilities",  "service": "electricity"},
+    {"id": "merch_2", "type": "merchant",  "name": "AquaFlow Water Co",    "service": "water"},
+
+    {"id": "comm_1",  "type": "community", "name": "Greenfield District",  "avg_repayment_rate": 0.92},
+    {"id": "comm_2",  "type": "community", "name": "Riverside Quarter",    "avg_repayment_rate": 0.78}
+  ],
+
+  "edges": [
+    {"source": "user_1",  "target": "emp_2",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_2",  "target": "emp_3",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_3",  "target": "emp_4",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_4",  "target": "emp_1",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_5",  "target": "emp_3",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_6",  "target": "emp_2",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_7",  "target": "emp_1",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_8",  "target": "emp_1",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_9",  "target": "emp_3",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_10", "target": "emp_1",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_11", "target": "emp_4",   "type": "works_at",      "weight": 1.0},
+    {"source": "user_12", "target": "emp_3",   "type": "works_at",      "weight": 1.0},
+
+    {"source": "user_1",  "target": "merch_1", "type": "pays_utility",   "weight": 0.8},
+    {"source": "user_2",  "target": "merch_1", "type": "pays_utility",   "weight": 0.9},
+    {"source": "user_3",  "target": "merch_2", "type": "pays_utility",   "weight": 0.7},
+    {"source": "user_5",  "target": "merch_1", "type": "pays_utility",   "weight": 0.85},
+    {"source": "user_7",  "target": "merch_2", "type": "pays_utility",   "weight": 0.95},
+    {"source": "user_9",  "target": "merch_1", "type": "pays_utility",   "weight": 0.92},
+    {"source": "user_10", "target": "merch_2", "type": "pays_utility",   "weight": 0.98},
+    {"source": "user_12", "target": "merch_1", "type": "pays_utility",   "weight": 0.90},
+
+    {"source": "user_1",  "target": "comm_2",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_2",  "target": "comm_2",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_3",  "target": "comm_2",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_4",  "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_5",  "target": "comm_2",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_6",  "target": "comm_2",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_7",  "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_8",  "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_9",  "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_10", "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_11", "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+    {"source": "user_12", "target": "comm_1",  "type": "lives_in",      "weight": 1.0},
+
+    {"source": "user_9",  "target": "user_10", "type": "referred_by",   "weight": 1.0},
+    {"source": "user_7",  "target": "user_8",  "type": "referred_by",   "weight": 1.0},
+    {"source": "user_11", "target": "user_12", "type": "referred_by",   "weight": 1.0},
+    {"source": "user_5",  "target": "user_6",  "type": "referred_by",   "weight": 1.0}
+  ]
+}
