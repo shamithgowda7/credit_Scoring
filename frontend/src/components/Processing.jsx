@@ -20,6 +20,8 @@ export default function Processing() {
         const userStr = sessionStorage.getItem('selectedUser');
         const ansStr = sessionStorage.getItem('ilfAnswers');
         const latStr = sessionStorage.getItem('ilfLatencies');
+        const isLLM = sessionStorage.getItem('isLLMSession') === 'true';
+        const isPreScored = sessionStorage.getItem('preScored') === 'true';
 
         if (!userStr || !ansStr || !latStr) {
           navigate('/assess');
@@ -30,25 +32,70 @@ export default function Processing() {
         const answers = JSON.parse(ansStr);
         const latencies = JSON.parse(latStr);
 
-        setStep(1); // Behavioral
-        const ilfRes = await fetch('http://127.0.0.1:8000/ilf-score', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ latencies, answers })
-        });
-        const ilfData = await ilfRes.json();
+        // ── Step 1: Behavioral Biometrics (ILF) ──
+        setStep(1);
+
+        let ilfData;
+        if (isLLM) {
+          // Use dynamic ILF for LLM sessions
+          const questionsStr = sessionStorage.getItem('ilfQuestions');
+          const questions = questionsStr ? JSON.parse(questionsStr) : [];
+          
+          const ilfRes = await fetch('http://127.0.0.1:8000/dynamic-ilf-score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ latencies, answers, questions })
+          });
+          ilfData = await ilfRes.json();
+        } else {
+          // Use standard ILF for demo mode
+          const ilfRes = await fetch('http://127.0.0.1:8000/ilf-score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ latencies, answers })
+          });
+          ilfData = await ilfRes.json();
+        }
         sessionStorage.setItem('ilfResult', JSON.stringify(ilfData));
 
         setStep(3); // Causal AI
         await new Promise(r => setTimeout(r, 600));
 
-        const scoreRes = await fetch('http://127.0.0.1:8000/score', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ features: user.features })
-        });
-        const scoreData = await scoreRes.json();
-        sessionStorage.setItem('scoreResult', JSON.stringify(scoreData));
+        // ── Step 2: Scoring ──
+        let scoreData;
+        if (isPreScored) {
+          // LLM sessions are already scored by the backend
+          scoreData = JSON.parse(sessionStorage.getItem('scoreResult'));
+          setStep(4);
+          await new Promise(r => setTimeout(r, 400));
+        } else {
+          // Demo mode: call /score endpoint
+          const scoreRes = await fetch('http://127.0.0.1:8000/score', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ features: user.features })
+          });
+          scoreData = await scoreRes.json();
+          sessionStorage.setItem('scoreResult', JSON.stringify(scoreData));
+        }
+
+        // ── Step 3: Log to Dashboard ──
+        try {
+          await fetch('http://127.0.0.1:8000/log-application', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              demo_user: user.name || "Unknown Applicant",
+              score: scoreData.score,
+              decision: scoreData.decision,
+              risk_tier: scoreData.risk_tier,
+              ilf_reliability: ilfData.reliability_score || 0,
+              catch_trial_flagged: ilfData.catch_trial_flagged || false
+            })
+          });
+        } catch (e) {
+          console.error("Failed to log application", e);
+        }
 
         setStep(5); // Finalizing
         await new Promise(r => setTimeout(r, 600));
@@ -81,6 +128,21 @@ export default function Processing() {
           animation: 'shimmer 1.5s infinite ease-in-out'
         }}></div>
       </div>
+
+      {/* Processing step indicators */}
+      {typeof step === 'number' && (
+        <div style={{ marginTop: '3rem', display: 'flex', gap: '8px' }}>
+          {steps.map((_, i) => (
+            <div key={i} style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: i <= step ? 'var(--neon-mint)' : 'rgba(255,255,255,0.1)',
+              transition: 'background 0.3s ease',
+              boxShadow: i === step ? '0 0 8px var(--neon-mint-glow)' : 'none'
+            }}></div>
+          ))}
+        </div>
+      )}
+
       <style>{`
         @keyframes shimmer {
           0% { transform: translateX(-100%); }

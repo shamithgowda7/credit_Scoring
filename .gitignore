@@ -23,10 +23,16 @@ env/
 *.swp
 *.swo
 
+# Environment / Secrets
+.env
+
 # OS
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# SQLite databases
+data/*.db
 
 # Data files (large CSVs — regenerate with src/scm_temporal_v1.py)
 data/*.csv

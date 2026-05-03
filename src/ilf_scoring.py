@@ -237,6 +237,116 @@ def _empty_result() -> Dict:
     }
 
 
+# ── Generic Dynamic ILF (for LLM-generated questions) ────────────────────────
+
+def compute_dynamic_ilf_score(latencies: List[float],
+                               answers: List[str],
+                               questions: List[str] = None) -> Dict:
+    """
+    Compute ILF reliability score for dynamic LLM-generated questions.
+
+    Unlike compute_ilf_score(), this version:
+      - Works with any number of questions (not just 3)
+      - Uses latency-only scoring (no twin-pair since questions are dynamic)
+      - Detects catch-trial failures by checking if the user agreed with
+        absurd statements (heuristic: answers starting with 'A' on questions
+        containing catch-trial keywords)
+
+    Parameters
+    ----------
+    latencies : list of float
+        Response times in seconds for each answered question.
+    answers : list of str
+        User's answers (e.g., "A. Strongly agree...")
+    questions : list of str, optional
+        Question text strings (used for catch-trial detection).
+
+    Returns
+    -------
+    dict with same shape as compute_ilf_score output.
+    """
+    n = min(len(latencies), len(answers))
+    if n == 0:
+        return _empty_result()
+
+    # 1) Per-question Inverse Gaussian scores
+    per_q_scores = []
+    for i in range(n):
+        s = _inverse_gaussian_penalty(latencies[i])
+        per_q_scores.append(round(s, 4))
+
+    avg_ig_score = float(np.mean(per_q_scores))
+
+    # 2) Latency consistency check (replacement for twin-pair delta)
+    #    Instead of twin pairs, we penalize high variance across all answers
+    if n >= 2:
+        lat_std = float(np.std(latencies[:n]))
+        lat_mean = float(np.mean(latencies[:n]))
+        cv = lat_std / lat_mean if lat_mean > 0 else 0
+        # CV < 0.5 = consistent, CV > 1.5 = very erratic
+        if cv <= 0.5:
+            consistency_score = 1.0
+        elif cv >= 1.5:
+            consistency_score = 0.3
+        else:
+            consistency_score = 1.0 - 0.7 * (cv - 0.5) / 1.0
+    else:
+        consistency_score = 1.0
+
+    # 3) Catch-trial detection (heuristic for dynamic questions)
+    catch_flagged = False
+    catch_keywords = [
+        "predict stock", "100% accuracy", "never made a financial mistake",
+        "zero risks", "hold my breath", "predict next week",
+        "never failed", "always perfect", "no risk whatsoever",
+    ]
+    if questions:
+        for i, q_text in enumerate(questions[:n]):
+            q_lower = q_text.lower() if q_text else ""
+            is_catch = any(kw in q_lower for kw in catch_keywords)
+            if is_catch and i < len(answers):
+                # If user agreed with an absurd statement
+                ans = answers[i].strip().upper()
+                if ans.startswith("A") or "AGREE" in ans.split("—")[0].upper():
+                    catch_flagged = True
+                    break
+
+    # 4) Combine into final R
+    w_ig = 0.65
+    w_consistency = 0.35
+    catch_penalty = 0.40 if catch_flagged else 0.0
+
+    R = w_ig * avg_ig_score + w_consistency * consistency_score - catch_penalty
+    R = max(0.0, min(1.0, R))
+
+    # Label
+    if R > 0.85:
+        label = "High"
+    elif R > 0.60:
+        label = "Moderate"
+    else:
+        label = "Low"
+
+    return {
+        "reliability_score": round(R, 4),
+        "reliability_pct": int(round(R * 100)),
+        "reliability_label": label,
+        "catch_trial_flagged": catch_flagged,
+        "per_question_scores": per_q_scores,
+        "delta_penalty": round(consistency_score, 4),
+        "avg_ig_score": round(avg_ig_score, 4),
+        "latencies_sec": [round(l, 3) for l in latencies[:n]],
+        "details": {
+            "weight_ig": w_ig,
+            "weight_consistency": w_consistency,
+            "catch_penalty_applied": catch_penalty,
+            "latency_cv": round(cv if n >= 2 else 0, 3),
+            "formula": f"R = {w_ig}*IG({round(avg_ig_score,3)}) + {w_consistency}*Consistency({round(consistency_score,3)}) - catch({catch_penalty})",
+            "mode": "dynamic_llm",
+        },
+    }
+
+
 # ── Quick self-test ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

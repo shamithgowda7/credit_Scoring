@@ -10,15 +10,32 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [llmStats, setLlmStats] = useState(null);
+  const [llmSessions, setLlmSessions] = useState([]);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [sessionDetail, setSessionDetail] = useState(null);
 
   useEffect(() => {
     Promise.all([
       fetch('http://127.0.0.1:8000/applications-log').then(r => r.json()),
-    ]).then(([logData]) => {
+      fetch('http://127.0.0.1:8000/sessions-summary').then(r => r.json()).catch(() => null),
+      fetch('http://127.0.0.1:8000/completed-sessions').then(r => r.json()).catch(() => ({sessions:[]})),
+    ]).then(([logData, statsData, sessData]) => {
       setApps(logData.applications || []);
+      if (statsData) setLlmStats(statsData);
+      setLlmSessions(sessData.sessions || []);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
+
+  const openSessionDetail = async (sessionId) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/session/${sessionId}`);
+      const data = await res.json();
+      setSessionDetail(data);
+      setSelectedSession(sessionId);
+    } catch (e) { console.error(e); }
+  };
 
   // Computed metrics
   const totalApps = apps.length;
@@ -103,6 +120,61 @@ export default function Dashboard() {
               <div style={kpiLabel}>Flagged Sessions</div>
             </div>
           </div>
+
+          {/* ── LLM SESSIONS CARD ── */}
+          {llmStats && llmStats.total_sessions > 0 && (
+            <div className="glass-card-cred" style={{ marginBottom: '3rem', padding: '2rem' }}>
+              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <BrainCircuit size={20} color="var(--neon-mint)"/> Adaptive AI Interviews
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.5rem' }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--neon-mint)' }}>{llmStats.completed_sessions}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Completed</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)' }}>{llmStats.avg_questions_per_session}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Avg Questions</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)' }}>{llmStats.llm_sessions}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Gemini Sessions</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: '#F59E0B' }}>{llmStats.mock_sessions}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Mock Sessions</div>
+                </div>
+              </div>
+
+              {/* LLM Session Table */}
+              {llmSessions.length > 0 && (
+                <div style={{ marginTop: '1.5rem', overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        {['Applicant', 'Score', 'Decision', 'Questions', 'Confidence', 'Mode', ''].map(h => (
+                          <th key={h} style={{ padding: '0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase', fontSize: '0.7rem' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {llmSessions.slice(0, 10).map((s, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                          <td style={{ padding: '0.8rem', fontWeight: 600 }}>{s.name}</td>
+                          <td style={{ padding: '0.8rem', fontFamily: 'Outfit', fontWeight: 700, color: (s.final_score||0) >= 700 ? 'var(--neon-mint)' : (s.final_score||0) >= 450 ? '#F59E0B' : 'var(--danger)' }}>{s.final_score || '—'}</td>
+                          <td style={{ padding: '0.8rem' }}><span style={{ background: (DECISION_COLORS[s.decision]||'#888') + '22', color: DECISION_COLORS[s.decision]||'#888', padding: '0.2rem 0.6rem', borderRadius: '50px', fontSize: '0.75rem', fontWeight: 600 }}>{s.decision || '—'}</span></td>
+                          <td style={{ padding: '0.8rem' }}>{s.total_turns || 0}</td>
+                          <td style={{ padding: '0.8rem', textTransform: 'capitalize' }}>{s.extraction_confidence || '—'}</td>
+                          <td style={{ padding: '0.8rem' }}><span style={{ fontSize: '0.75rem', color: s.is_mock_mode ? '#F59E0B' : 'var(--neon-mint)' }}>{s.is_mock_mode ? 'Mock' : 'Gemini'}</span></td>
+                          <td style={{ padding: '0.8rem' }}><button onClick={() => openSessionDetail(s.session_id)} style={{ background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', borderRadius: '6px', padding: '0.3rem 0.8rem', cursor: 'pointer', fontSize: '0.75rem' }}>View</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── CHARTS ROW ── */}
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '1.5rem', marginBottom: '3rem' }}>
@@ -231,6 +303,45 @@ export default function Dashboard() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── SESSION DRILL-DOWN MODAL ── */}
+      {selectedSession && sessionDetail && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '2rem' }} onClick={() => { setSelectedSession(null); setSessionDetail(null); }}>
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '20px', padding: '2.5rem', maxWidth: '700px', width: '100%', maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ fontFamily: 'Outfit', fontSize: '1.5rem', marginBottom: '0.5rem' }}>
+              {sessionDetail.session?.name || 'Session Detail'}
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '2rem' }}>
+              Score: <strong style={{ color: 'var(--neon-mint)' }}>{sessionDetail.session?.final_score || '—'}</strong> | Decision: <strong>{sessionDetail.session?.decision || '—'}</strong> | Confidence: {sessionDetail.session?.extraction_confidence || '—'}
+            </p>
+
+            {/* Extracted Features */}
+            {sessionDetail.session?.extracted_features && (
+              <div style={{ marginBottom: '2rem', background: 'rgba(0,255,157,0.05)', border: '1px solid rgba(0,255,157,0.15)', borderRadius: '12px', padding: '1.2rem' }}>
+                <h4 style={{ fontFamily: 'Outfit', fontSize: '0.9rem', color: 'var(--neon-mint)', marginBottom: '1rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Extracted Features</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.8rem' }}>
+                  {Object.entries(sessionDetail.session.extracted_features).map(([k, v]) => (
+                    <div key={k} style={{ fontSize: '0.85rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>{k}:</span> <strong>{typeof v === 'number' ? v.toFixed(3) : v}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Conversation Transcript */}
+            <h4 style={{ fontFamily: 'Outfit', fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Conversation Transcript</h4>
+            {(sessionDetail.session?.qa_history || []).map((qa, i) => (
+              <div key={i} style={{ marginBottom: '1.2rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border-subtle)' }}>
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', marginBottom: '4px', fontWeight: 500 }}>Q{i+1}: {qa.q}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--neon-mint)' }}>→ {qa.a}</div>
+              </div>
+            ))}
+
+            <button className="btn-outline" onClick={() => { setSelectedSession(null); setSessionDetail(null); }} style={{ marginTop: '1rem', width: '100%' }}>Close</button>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,53 +1,29 @@
 [
   {
-    "timestamp": "2026-04-28T15:21:41.964698",
-    "demo_user": "Raj Patel",
-    "user_id": 2,
-    "score": 446,
-    "probability": 0.755545,
-    "decision": "NANO_CREDIT",
-    "risk_tier": "High",
-    "ilf_reliability": 0.5074,
-    "ilf_label": "Low",
-    "catch_trial_flagged": false,
-    "latencies": [
-      6.576,
-      10.119,
-      6.717
-    ]
-  },
-  {
-    "timestamp": "2026-04-28T15:21:43.492875",
-    "demo_user": "Raj Patel",
-    "user_id": 2,
-    "score": 446,
-    "probability": 0.755545,
-    "decision": "NANO_CREDIT",
-    "risk_tier": "High",
-    "ilf_reliability": 0.5074,
-    "ilf_label": "Low",
-    "catch_trial_flagged": false,
-    "latencies": [
-      6.576,
-      10.119,
-      6.717
-    ]
-  },
-  {
-    "timestamp": "2026-04-28T15:22:44.708270",
-    "demo_user": "Zara Mbeki",
-    "user_id": 12,
-    "score": 839,
-    "probability": 0.100248,
+    "timestamp": "2026-05-03T22:41:37.283552",
+    "demo_user": "rh rhuf",
+    "score": 899,
     "decision": "STANDARD",
     "risk_tier": "Low",
-    "ilf_reliability": 0.3259,
-    "ilf_label": "Low",
-    "catch_trial_flagged": true,
-    "latencies": [
-      5.15,
-      2.933,
-      1.757
-    ]
+    "ilf_reliability": 0.5834,
+    "catch_trial_flagged": false
+  },
+  {
+    "timestamp": "2026-05-03T22:59:20.246208",
+    "demo_user": "Custom Applicant",
+    "score": 899,
+    "decision": "STANDARD",
+    "risk_tier": "Low",
+    "ilf_reliability": 0.5563,
+    "catch_trial_flagged": false
+  },
+  {
+    "timestamp": "2026-05-03T23:01:33.776616",
+    "demo_user": "jninn",
+    "score": 899,
+    "decision": "STANDARD",
+    "risk_tier": "Low",
+    "ilf_reliability": 0.9242,
+    "catch_trial_flagged": false
   }
 ]

@@ -16,8 +16,13 @@ Run with:
 
 import json
 import os
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# Load .env BEFORE any other imports that read env vars
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 import joblib
 import numpy as np
@@ -28,8 +33,19 @@ from pydantic import BaseModel, Field
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.ilf_scoring import compute_ilf_score
+from src.ilf_scoring import compute_ilf_score, compute_dynamic_ilf_score
 from api.graph_utils import load_graph, load_graph_contexts, get_graph_context, get_graph_stats
+from src.database import (
+    init_db, create_session, get_session, update_session_history, 
+    finalize_session, add_conversation_turn, get_session_turns,
+    get_all_completed_sessions, get_sessions_summary as db_get_sessions_summary
+)
+from api.llm_service import evaluate_and_generate_next, is_llm_available
+
+logger = logging.getLogger(__name__)
+
+# Initialize Database
+init_db()
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -179,11 +195,22 @@ class HealthResponse(BaseModel):
     demo_users_count: int
     graph_nodes: int = 0
     graph_edges: int = 0
+    llm_available: bool = False
+    llm_mode: str = "mock"
 
 class ILFRequest(BaseModel):
     latencies: list[float]
     answers: list[str]
 
+class StartAssessmentRequest(BaseModel):
+    name: str
+    bank_context: str
+
+class SubmitAnswerRequest(BaseModel):
+    session_id: str
+    question: str
+    answer: str
+    response_latency_sec: Optional[float] = None
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -207,6 +234,7 @@ def compute_contributions(feature_values: np.ndarray) -> dict:
 @app.get("/health", response_model=HealthResponse)
 def health_check():
     """Health check — verifies model is loaded and ready."""
+    llm_ok = is_llm_available()
     return HealthResponse(
         status="healthy",
         model_loaded=True,
@@ -214,6 +242,8 @@ def health_check():
         demo_users_count=len(DEMO_USERS),
         graph_nodes=GRAPH_STATS.get("node_count", 0),
         graph_edges=GRAPH_STATS.get("edge_count", 0),
+        llm_available=llm_ok,
+        llm_mode="gemini" if llm_ok else "mock",
     )
 
 @app.post("/ilf-score")
@@ -222,6 +252,128 @@ def get_ilf_score(data: ILFRequest):
     result = compute_ilf_score(data.latencies, data.answers)
     return result
 
+
+class DynamicILFRequest(BaseModel):
+    latencies: list[float]
+    answers: list[str]
+    questions: list[str] = []
+
+
+@app.post("/dynamic-ilf-score")
+def get_dynamic_ilf_score(data: DynamicILFRequest):
+    """Computes the dynamic ILF score for LLM-generated questions."""
+    result = compute_dynamic_ilf_score(
+        data.latencies, data.answers, data.questions or None
+    )
+    return result
+
+@app.post("/start-assessment")
+def start_assessment(req: StartAssessmentRequest):
+    import uuid
+    session_id = str(uuid.uuid4())
+    is_mock = not is_llm_available()
+    create_session(session_id, req.name, req.bank_context, is_mock=is_mock)
+    
+    # Generate first question
+    try:
+        result = evaluate_and_generate_next(req.bank_context, [])
+        
+        # Store the first question as a conversation turn (unanswered)
+        if result.get("status") == "ASK_QUESTION":
+            add_conversation_turn(
+                session_id=session_id,
+                turn_number=1,
+                question_text=result.get("question_text", ""),
+                options=result.get("options"),
+                dimension=result.get("dimension"),
+            )
+        
+        return {
+            "session_id": session_id, 
+            "result": result,
+            "llm_mode": "gemini" if not is_mock else "mock",
+        }
+    except Exception as e:
+        logger.error(f"start-assessment error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/submit-answer")
+def submit_answer(req: SubmitAnswerRequest):
+    session = get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] == "COMPLETED":
+        raise HTTPException(status_code=400, detail="Session already completed")
+        
+    qa_history = json.loads(session["qa_history"])
+    qa_history.append({"q": req.question, "a": req.answer})
+    update_session_history(req.session_id, qa_history)
+    
+    turn_number = len(qa_history)
+    
+    # Update the existing turn record with the user's answer and latency
+    add_conversation_turn(
+        session_id=req.session_id,
+        turn_number=turn_number,
+        question_text=req.question,
+        user_answer=req.answer,
+        response_latency_sec=req.response_latency_sec,
+    )
+    
+    try:
+        result = evaluate_and_generate_next(
+            session["bank_context"], 
+            qa_history,
+        )
+        
+        if result.get("status") == "ASK_QUESTION":
+            # Store the next question turn (unanswered yet)
+            add_conversation_turn(
+                session_id=req.session_id,
+                turn_number=turn_number + 1,
+                question_text=result.get("question_text", ""),
+                options=result.get("options"),
+                dimension=result.get("dimension"),
+            )
+            return {"result": result}
+
+        elif result.get("status") == "CONFIDENT_EXTRACTION":
+            # ── AUTO-SCORE: Run the causal model immediately ──
+            features = result.get("features", {})
+            try:
+                scoring_req = ScoringRequest(features=features)
+                score_response = score(scoring_req)
+                score_dict = score_response.model_dump() if hasattr(score_response, 'model_dump') else score_response.dict()
+                
+                # Finalize with real score data
+                finalize_session(
+                    req.session_id, 
+                    features, 
+                    score_dict.get("score", 0), 
+                    score_dict.get("decision", "UNKNOWN"),
+                    risk_tier=score_dict.get("risk_tier"),
+                    confidence=result.get("confidence"),
+                )
+                
+                return {
+                    "result": result, 
+                    "score_result": score_dict,
+                }
+            except Exception as score_err:
+                logger.error(f"Auto-scoring failed: {score_err}")
+                # Still return the extraction, frontend can fall back
+                finalize_session(
+                    req.session_id, features, 0, "SCORING_FAILED",
+                    confidence=result.get("confidence"),
+                )
+                return {"result": result, "score_error": str(score_err)}
+        else:
+            return {"result": result}
+            
+    except Exception as e:
+        logger.error(f"submit-answer error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/score", response_model=ScoringResponse)
 def score(application: ScoringRequest):
@@ -492,6 +644,14 @@ class LeadRequest(BaseModel):
     bank_name: str
     message: str = ""
 
+class ApplicationLogRequest(BaseModel):
+    demo_user: str
+    score: int
+    decision: str
+    risk_tier: str
+    ilf_reliability: float
+    catch_trial_flagged: bool
+
 @app.post("/leads")
 def submit_lead(lead: LeadRequest):
     """Save a B2B lead from the landing page contact form."""
@@ -526,8 +686,85 @@ def get_applications_log():
         apps = []
     return {"applications": apps, "count": len(apps)}
 
+@app.post("/log-application")
+def log_application(app_data: ApplicationLogRequest):
+    """Log an application result to the dashboard."""
+    log_path = PROJECT_ROOT / "logs" / "applications.json"
+    log_path.parent.mkdir(exist_ok=True)
+    apps = []
+    if log_path.exists():
+        try:
+            apps = json.loads(log_path.read_text())
+        except Exception:
+            apps = []
+    from datetime import datetime
+    apps.append({
+        "timestamp": datetime.now().isoformat(),
+        "demo_user": app_data.demo_user,
+        "score": app_data.score,
+        "decision": app_data.decision,
+        "risk_tier": app_data.risk_tier,
+        "ilf_reliability": app_data.ilf_reliability,
+        "catch_trial_flagged": app_data.catch_trial_flagged,
+    })
+    log_path.write_text(json.dumps(apps, indent=2))
+    return {"status": "logged"}
+
 
 @app.get("/graph-stats")
 def graph_stats():
     """Return knowledge graph summary statistics for the dashboard."""
     return GRAPH_STATS
+
+
+# ── LLM Session Endpoints ────────────────────────────────────────────────────
+
+@app.get("/session/{session_id}")
+def get_session_detail(session_id: str):
+    """Return full session data including conversation turns."""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    turns = get_session_turns(session_id)
+    
+    # Parse JSON fields for the response
+    session_data = dict(session)
+    if session_data.get("qa_history"):
+        session_data["qa_history"] = json.loads(session_data["qa_history"])
+    if session_data.get("extracted_features"):
+        session_data["extracted_features"] = json.loads(session_data["extracted_features"])
+    
+    # Parse options JSON in turns
+    for turn in turns:
+        if turn.get("options"):
+            try:
+                turn["options"] = json.loads(turn["options"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    
+    return {"session": session_data, "turns": turns}
+
+
+@app.get("/sessions-summary")
+def sessions_summary():
+    """Return aggregate LLM session statistics for the dashboard."""
+    return db_get_sessions_summary()
+
+
+@app.get("/completed-sessions")
+def completed_sessions():
+    """Return all completed LLM assessment sessions for the dashboard."""
+    sessions = get_all_completed_sessions()
+    for s in sessions:
+        if s.get("extracted_features"):
+            try:
+                s["extracted_features"] = json.loads(s["extracted_features"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if s.get("qa_history"):
+            try:
+                s["qa_history"] = json.loads(s["qa_history"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return {"sessions": sessions, "count": len(sessions)}
