@@ -145,6 +145,55 @@ def compute_graph_features(G: nx.Graph, user_node_id: str) -> Dict:
     }
 
 
+def get_dynamic_graph_context(borrower_id: str, kg) -> Dict:
+    """
+    Adapter function that uses the KnowledgeGraph engine to compute features.
+    
+    Parameters
+    ----------
+    borrower_id : str
+        The node ID (e.g., "b_session_id").
+    kg : KnowledgeGraph
+        The live KnowledgeGraph engine instance.
+    """
+    if borrower_id not in kg.graph:
+        return _empty_features()
+        
+    # Use the KG engine's logic
+    kg_feats = kg.compute_graph_features(borrower_id)
+    
+    # Get direct nodes for names
+    employer_name = "Unknown"
+    community_name = "Unknown"
+    
+    for neighbor in kg.graph.successors(borrower_id):
+        ndata = kg.graph.nodes[neighbor]
+        etype = kg.graph.get_edge_data(borrower_id, neighbor).get('type')
+        if etype == 'works_at' and ndata.get('type') == 'employer':
+            employer_name = ndata.get('name', 'Unknown')
+        elif etype == 'lives_in' and ndata.get('type') == 'community':
+            community_name = ndata.get('name', 'Unknown')
+            
+    # Map back to the format expected by the frontend ScoringResponse
+    adjustment = int((kg_feats['community_repayment_rate'] - 0.80) * 50) + \
+                 int((0.05 - kg_feats['employer_default_rate']) * 100) + \
+                 int(min(kg_feats['degree_centrality'] - 2, 3))
+                 
+    return {
+        "graph_degree": kg_feats['degree_centrality'],
+        "employer_name": employer_name,
+        "employer_default_rate": kg_feats['employer_default_rate'],
+        "community_name": community_name,
+        "community_trust_score": kg_feats['community_repayment_rate'],
+        "graph_risk_adjustment": adjustment,
+        "graph_notes": _generate_notes(
+            employer_name, kg_feats['employer_default_rate'],
+            community_name, kg_feats['community_repayment_rate'],
+            False, kg_feats['degree_centrality']
+        )
+    }
+
+
 def _generate_notes(emp_name, emp_rate, comm_name, comm_trust, referral, degree):
     """Generate a human-readable explanation of the graph adjustment."""
     parts = []

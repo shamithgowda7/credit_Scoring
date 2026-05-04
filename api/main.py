@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.ilf_scoring import compute_ilf_score, compute_dynamic_ilf_score
-from api.graph_utils import load_graph, load_graph_contexts, get_graph_context, get_graph_stats
+from api.graph_utils import load_graph, load_graph_contexts, get_graph_context, get_graph_stats, get_dynamic_graph_context
 from src.database import (
     init_db, create_session, get_session, update_session_history, 
     finalize_session, add_conversation_turn, get_session_turns,
@@ -484,6 +484,23 @@ def score(application: ScoringRequest):
     credit_score += graph_boost
     credit_score = max(300, min(900, credit_score))
 
+    # ── (C) Session-based Graph Context ───────────────────────────────
+    # If this is a session-based application (no user_id), check the dynamic KG
+    if application.user_id is None and graph_features_out is None:
+        # Check if we have a session_id in the features or context (passed via demo users usually)
+        # For real sessions, the frontend will pass the session_id or borrower_id
+        # For now, we'll try to find if a borrower node with these features exists in the KG
+        for nid, ndata in KG_ENGINE.graph.nodes(data=True):
+            if ndata.get('type') == 'borrower' and ndata.get('features') == application.features:
+                gctx = get_dynamic_graph_context(nid, KG_ENGINE)
+                # Apply boost if not already applied
+                if graph_boost == 0:
+                    graph_boost = gctx.get("graph_risk_adjustment", 0)
+                    credit_score += graph_boost
+                    credit_score = max(300, min(900, credit_score))
+                    graph_features_out = gctx
+                break
+
     # Decision logic (thresholds loaded from thresholds.json)
     if credit_score < THRESHOLDS["DECLINE_UPPER"]:
         decision = "DECLINE"
@@ -759,10 +776,10 @@ def kg_stats():
 def kg_graph(max_nodes: int = 200):
     """Return full graph data for frontend visualization."""
     try:
-        return KG_ENGINE.serialize_for_frontend(max_nodes=max_nodes)
+        return KG_ENGINE.get_full_graph_data()
     except Exception as e:
         logger.error(f"KG graph error: {e}")
-        return {"nodes": [], "edges": [], "stats": {}, "error": str(e)}
+        return {"nodes": [], "links": [], "error": str(e)}
 
 
 @app.get("/kg/node/{node_id}")
@@ -776,14 +793,14 @@ def kg_node_detail(node_id: str):
     # If borrower, also compute graph features
     graph_features = None
     if node.get("type") == "borrower":
-        graph_features = KG_ENGINE.compute_borrower_features(node_id)
+        graph_features = KG_ENGINE.compute_graph_features(node_id)
     return {"node": node, "edges": edges, "graph_features": graph_features}
 
 
 @app.get("/kg/neighborhood/{node_id}")
 def kg_neighborhood(node_id: str, depth: int = 1):
     """Return the neighborhood subgraph for a node."""
-    return KG_ENGINE.get_neighborhood(node_id, depth=min(depth, 3))
+    return KG_ENGINE.get_borrower_neighborhood(node_id, radius=min(depth, 3))
 
 
 @app.get("/kg/insights")

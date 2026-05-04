@@ -1,6 +1,8 @@
 import networkx as nx
 from collections import defaultdict
 from typing import Dict, List, Any
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 from src import database as db
 
@@ -39,9 +41,28 @@ class KnowledgeGraph:
                 **props
             )
 
+    def load(self):
+        """Alias for load_from_db to support seeder."""
+        self.load_from_db()
+
     def refresh(self):
         """Reload the graph from the database."""
         self.load_from_db()
+
+    def _ensure_loaded(self):
+        """Ensure the graph is populated."""
+        if not self.graph.nodes:
+            self.load_from_db()
+
+    def add_node(self, node_id: str, node_type: str, name: str = None, properties: dict = None):
+        """Add/Update node in DB and in-memory graph."""
+        db.upsert_kg_node(node_id, node_type, name, properties)
+        self.graph.add_node(node_id, type=node_type, name=name, **(properties or {}))
+
+    def add_edge(self, source_id: str, target_id: str, edge_type: str, weight: float = 1.0, properties: dict = None):
+        """Add/Update edge in DB and in-memory graph."""
+        db.upsert_kg_edge(source_id, target_id, edge_type, weight, properties)
+        self.graph.add_edge(source_id, target_id, type=edge_type, weight=weight, **(properties or {}))
 
     def get_borrower_neighborhood(self, borrower_id: str, radius: int = 1) -> dict:
         """Get the subgraph around a borrower."""
@@ -71,8 +92,8 @@ class KnowledgeGraph:
             
         features = {}
         
-        # 1. Centrality (using the whole graph or a localized subgraph? We'll use degree)
-        features['degree_centrality'] = self.graph.degree(borrower_id) if self.graph.is_directed() else 0
+        # 1. Degree
+        features['degree_centrality'] = self.graph.degree(borrower_id)
         
         employer_default_rate = 0.0
         community_repayment_rate = 1.0
@@ -82,6 +103,7 @@ class KnowledgeGraph:
         similar_defaults = 0
         similar_total = 0
         
+        # Successors (outbound edges)
         for neighbor in self.graph.successors(borrower_id):
             edge_data = self.graph.get_edge_data(borrower_id, neighbor)
             neighbor_data = self.graph.nodes[neighbor]
@@ -94,17 +116,17 @@ class KnowledgeGraph:
                 
             elif edge_data['type'] == 'similar_to' and neighbor_data.get('type') == 'borrower':
                 similar_total += 1
-                if neighbor_data.get('decision') == 'REJECTED':
+                if neighbor_data.get('decision') == 'REJECTED' or neighbor_data.get('decision') == 'DECLINE':
                     similar_defaults += 1
                     
-        # Also check incoming edges
+        # Predecessors (inbound edges)
         for neighbor in self.graph.predecessors(borrower_id):
             edge_data = self.graph.get_edge_data(neighbor, borrower_id)
             neighbor_data = self.graph.nodes[neighbor]
             
             if edge_data['type'] == 'similar_to' and neighbor_data.get('type') == 'borrower':
                 similar_total += 1
-                if neighbor_data.get('decision') == 'REJECTED':
+                if neighbor_data.get('decision') == 'REJECTED' or neighbor_data.get('decision') == 'DECLINE':
                     similar_defaults += 1
 
         if similar_total > 0:
@@ -117,9 +139,67 @@ class KnowledgeGraph:
         
         return features
 
+    def compute_similarity_edges(self, threshold: float = 0.85) -> int:
+        """Batch compute similarity edges for all borrowers."""
+        borrowers = [
+            (nid, ndata) for nid, ndata in self.graph.nodes(data=True)
+            if ndata.get("type") == "borrower"
+        ]
+        
+        if len(borrowers) < 2:
+            return 0
+            
+        feature_keys = ['income_mean', 'income_cv', 'savings_ratio', 'credit_utilization', 'repayment_history', 'social_capital_score']
+        
+        # Build matrix
+        vectors = []
+        valid_bids = []
+        for bid, data in borrowers:
+            feats = data.get("features", {})
+            if not feats: continue
+            
+            vec = []
+            for k in feature_keys:
+                try: vec.append(float(feats.get(k, 0.0)))
+                except: vec.append(0.0)
+            
+            if np.linalg.norm(vec) > 0:
+                vectors.append(vec)
+                valid_bids.append(bid)
+                
+        if len(vectors) < 2:
+            return 0
+            
+        vectors_np = np.array(vectors)
+        sim_matrix = cosine_similarity(vectors_np)
+        
+        edge_count = 0
+        for i in range(len(valid_bids)):
+            for j in range(i + 1, len(valid_bids)):
+                sim = sim_matrix[i, j]
+                if sim > threshold:
+                    self.add_edge(
+                        valid_bids[i], valid_bids[j], 
+                        "similar_to", weight=float(sim)
+                    )
+                    edge_count += 1
+        return edge_count
+
     def get_stats(self) -> dict:
-        """Get summary statistics for the dashboard."""
-        return db.get_kg_stats()
+        """Get summary statistics with graph-specific metrics."""
+        base_stats = db.get_kg_stats()
+        
+        if self.graph.nodes:
+            base_stats['avg_degree'] = sum(dict(self.graph.degree()).values()) / len(self.graph)
+            base_stats['density'] = nx.density(self.graph)
+            # Undirected version for components
+            U = self.graph.to_undirected()
+            base_stats['connected_components'] = nx.number_connected_components(U)
+            
+            borrower_nodes = [n for n, d in self.graph.nodes(data=True) if d.get('type') == 'borrower']
+            base_stats['borrower_count'] = len(borrower_nodes)
+            
+        return base_stats
 
     def get_full_graph_data(self) -> dict:
         """Return the full graph formatted for react-force-graph-2d."""
@@ -131,8 +211,7 @@ class KnowledgeGraph:
         for node_id, data in G.nodes(data=True):
             node_dict = {"id": node_id}
             node_dict.update(data)
-            # Ensure name exists
-            if 'name' not in node_dict:
+            if 'name' not in node_dict or not node_dict['name']:
                 node_dict['name'] = node_id
             nodes.append(node_dict)
             
