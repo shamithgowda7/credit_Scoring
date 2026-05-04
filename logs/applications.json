@@ -25,5 +25,23 @@
     "risk_tier": "Low",
     "ilf_reliability": 0.9242,
     "catch_trial_flagged": false
+  },
+  {
+    "timestamp": "2026-05-04T10:30:51.851858",
+    "demo_user": "neeraj p",
+    "score": 899,
+    "decision": "STANDARD",
+    "risk_tier": "Low",
+    "ilf_reliability": 0.7618,
+    "catch_trial_flagged": false
+  },
+  {
+    "timestamp": "2026-05-04T10:30:51.867316",
+    "demo_user": "neeraj p",
+    "score": 899,
+    "decision": "STANDARD",
+    "risk_tier": "Low",
+    "ilf_reliability": 0.7618,
+    "catch_trial_flagged": false
   }
 ]

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { ArrowLeft, Users, TrendingUp, ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle2, BrainCircuit } from 'lucide-react';
+import { ArrowLeft, Users, TrendingUp, ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle2, BrainCircuit, Network } from 'lucide-react';
 
 const RISK_COLORS = { High: '#FF3B30', Medium: '#F59E0B', Low: '#00FF9D' };
 const DECISION_COLORS = { STANDARD: '#00FF9D', NANO_CREDIT: '#F59E0B', DECLINE: '#FF3B30' };
@@ -14,16 +14,22 @@ export default function Dashboard() {
   const [llmSessions, setLlmSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [sessionDetail, setSessionDetail] = useState(null);
+  const [kgStats, setKgStats] = useState(null);
+  const [kgInsights, setKgInsights] = useState(null);
 
   useEffect(() => {
     Promise.all([
       fetch('http://127.0.0.1:8000/applications-log').then(r => r.json()),
       fetch('http://127.0.0.1:8000/sessions-summary').then(r => r.json()).catch(() => null),
       fetch('http://127.0.0.1:8000/completed-sessions').then(r => r.json()).catch(() => ({sessions:[]})),
-    ]).then(([logData, statsData, sessData]) => {
+      fetch('http://127.0.0.1:8000/kg/stats').then(r => r.json()).catch(() => null),
+      fetch('http://127.0.0.1:8000/kg/insights').then(r => r.json()).catch(() => null),
+    ]).then(([logData, statsData, sessData, kgData, kgIns]) => {
       setApps(logData.applications || []);
       if (statsData) setLlmStats(statsData);
       setLlmSessions(sessData.sessions || []);
+      if (kgData) setKgStats(kgData);
+      if (kgIns) setKgInsights(kgIns);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
@@ -81,9 +87,14 @@ export default function Dashboard() {
           </h1>
           <p style={{ color: 'var(--text-muted)' }}>Real-time portfolio analytics and risk monitoring</p>
         </div>
-        <button className="btn-primary" onClick={() => navigate('/assess')} style={{ width: 'auto', padding: '0.8rem 1.5rem', fontSize: '0.9rem' }}>
-          + New Assessment
-        </button>
+        <div style={{ display: 'flex', gap: '0.8rem' }}>
+          <button className="btn-outline" onClick={() => navigate('/knowledge-graph')} style={{ width: 'auto', padding: '0.8rem 1.2rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Network size={16}/> Knowledge Graph
+          </button>
+          <button className="btn-primary" onClick={() => navigate('/assess')} style={{ width: 'auto', padding: '0.8rem 1.5rem', fontSize: '0.9rem' }}>
+            + New Assessment
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -269,6 +280,42 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+
+          {/* ── KNOWLEDGE GRAPH INSIGHTS ── */}
+          {kgStats && kgStats.total_nodes > 0 && (
+            <div className="glass-card-cred" style={{ marginBottom: '3rem', padding: '2rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <h3 style={{ fontFamily: 'Outfit', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Network size={20} color="#A855F7"/> Knowledge Graph Intelligence
+                </h3>
+                <button onClick={() => navigate('/knowledge-graph')} style={{ background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Inter' }}>Explore Full Graph →</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+                {[
+                  ['Nodes', kgStats.total_nodes, '#A855F7'],
+                  ['Edges', kgStats.total_edges, '#A855F7'],
+                  ['Borrowers', kgStats.borrower_count || 0, '#00FF9D'],
+                  ['Avg Degree', kgStats.avg_degree || 0, '#3B82F6'],
+                  ['Components', kgStats.connected_components || 0, '#F59E0B'],
+                ].map(([label, val, color]) => (
+                  <div key={label} style={{ textAlign: 'center' }}>
+                    <div style={{ fontFamily: 'Outfit', fontSize: '1.6rem', fontWeight: 800, color }}>{val}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase' }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              {kgInsights && kgInsights.insights && kgInsights.insights.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.8rem' }}>
+                  {kgInsights.insights.slice(0, 4).map((ins, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '1rem' }}>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>{ins.title}</div>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{ins.description}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── APPLICATION LOG TABLE ── */}
           <div className="glass-card-cred">

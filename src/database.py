@@ -68,6 +68,38 @@ def init_db():
         )
     ''')
 
+    # ── Knowledge Graph Tables ─────────────────────────────────────────────
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS kg_nodes (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            name TEXT,
+            properties TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS kg_edges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            weight REAL DEFAULT 1.0,
+            properties TEXT DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (source_id) REFERENCES kg_nodes(id),
+            FOREIGN KEY (target_id) REFERENCES kg_nodes(id)
+        )
+    ''')
+
+    # Indexes for fast graph traversal
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_kg_edges_source ON kg_edges(source_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_kg_edges_target ON kg_edges(target_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_kg_edges_type ON kg_edges(type)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(type)')
+
     conn.commit()
     conn.close()
 
@@ -219,3 +251,180 @@ def get_sessions_summary() -> dict:
         "avg_questions_per_session": avg_turns,
         "avg_interview_duration_sec": avg_duration,
     }
+
+
+# ── Knowledge Graph CRUD ──────────────────────────────────────────────────────
+
+def upsert_kg_node(node_id: str, node_type: str, name: str = None,
+                   properties: dict = None):
+    """Insert or update a knowledge graph node."""
+    conn = get_db_connection()
+    props_json = json.dumps(properties or {})
+    conn.execute(
+        '''INSERT INTO kg_nodes (id, type, name, properties)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+               type = excluded.type,
+               name = COALESCE(excluded.name, kg_nodes.name),
+               properties = excluded.properties,
+               updated_at = CURRENT_TIMESTAMP''',
+        (node_id, node_type, name, props_json)
+    )
+    conn.commit()
+    conn.close()
+
+
+def upsert_kg_edge(source_id: str, target_id: str, edge_type: str,
+                   weight: float = 1.0, properties: dict = None):
+    """Insert or update a knowledge graph edge (upsert by source+target+type)."""
+    conn = get_db_connection()
+    props_json = json.dumps(properties or {})
+    # Check if edge exists
+    existing = conn.execute(
+        'SELECT id FROM kg_edges WHERE source_id = ? AND target_id = ? AND type = ?',
+        (source_id, target_id, edge_type)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            '''UPDATE kg_edges SET weight = ?, properties = ?,
+               created_at = CURRENT_TIMESTAMP
+               WHERE id = ?''',
+            (weight, props_json, existing['id'])
+        )
+    else:
+        conn.execute(
+            '''INSERT INTO kg_edges (source_id, target_id, type, weight, properties)
+               VALUES (?, ?, ?, ?, ?)''',
+            (source_id, target_id, edge_type, weight, props_json)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_kg_nodes(node_type: str = None) -> List[dict]:
+    """Return all KG nodes, optionally filtered by type."""
+    conn = get_db_connection()
+    if node_type:
+        rows = conn.execute(
+            'SELECT * FROM kg_nodes WHERE type = ? ORDER BY created_at DESC',
+            (node_type,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT * FROM kg_nodes ORDER BY type, created_at DESC'
+        ).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get('properties'):
+            try:
+                d['properties'] = json.loads(d['properties'])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        results.append(d)
+    return results
+
+
+def get_kg_node(node_id: str) -> Optional[dict]:
+    """Return a single KG node by ID."""
+    conn = get_db_connection()
+    row = conn.execute(
+        'SELECT * FROM kg_nodes WHERE id = ?', (node_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        d = dict(row)
+        if d.get('properties'):
+            try:
+                d['properties'] = json.loads(d['properties'])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return d
+    return None
+
+
+def get_kg_edges(source_id: str = None, target_id: str = None,
+                 edge_type: str = None) -> List[dict]:
+    """Return KG edges with optional filters."""
+    conn = get_db_connection()
+    query = 'SELECT * FROM kg_edges WHERE 1=1'
+    params = []
+    if source_id:
+        query += ' AND source_id = ?'
+        params.append(source_id)
+    if target_id:
+        query += ' AND target_id = ?'
+        params.append(target_id)
+    if edge_type:
+        query += ' AND type = ?'
+        params.append(edge_type)
+    query += ' ORDER BY created_at DESC'
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get('properties'):
+            try:
+                d['properties'] = json.loads(d['properties'])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        results.append(d)
+    return results
+
+
+def get_kg_node_edges(node_id: str) -> List[dict]:
+    """Return all edges connected to a node (as source OR target)."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        '''SELECT * FROM kg_edges
+           WHERE source_id = ? OR target_id = ?
+           ORDER BY type, created_at DESC''',
+        (node_id, node_id)
+    ).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        if d.get('properties'):
+            try:
+                d['properties'] = json.loads(d['properties'])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        results.append(d)
+    return results
+
+
+def get_kg_stats() -> dict:
+    """Return summary statistics about the knowledge graph."""
+    conn = get_db_connection()
+    total_nodes = conn.execute('SELECT COUNT(*) as c FROM kg_nodes').fetchone()['c']
+    total_edges = conn.execute('SELECT COUNT(*) as c FROM kg_edges').fetchone()['c']
+
+    # Node type counts
+    node_types = {}
+    for row in conn.execute('SELECT type, COUNT(*) as c FROM kg_nodes GROUP BY type').fetchall():
+        node_types[row['type']] = row['c']
+
+    # Edge type counts
+    edge_types = {}
+    for row in conn.execute('SELECT type, COUNT(*) as c FROM kg_edges GROUP BY type').fetchall():
+        edge_types[row['type']] = row['c']
+
+    conn.close()
+    return {
+        'total_nodes': total_nodes,
+        'total_edges': total_edges,
+        'node_types': node_types,
+        'edge_types': edge_types,
+    }
+
+
+def delete_all_kg_data():
+    """Clear all KG data (for re-seeding)."""
+    conn = get_db_connection()
+    conn.execute('DELETE FROM kg_edges')
+    conn.execute('DELETE FROM kg_nodes')
+    conn.commit()
+    conn.close()

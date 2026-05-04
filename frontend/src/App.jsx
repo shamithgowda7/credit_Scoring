@@ -6,6 +6,7 @@ import Welcome from './components/Welcome';
 import ILFQuestions from './components/ILFQuestions';
 import Processing from './components/Processing';
 import Results from './components/Results';
+import KnowledgeGraphPage from './components/KnowledgeGraph';
 
 export default function App() {
   return (
@@ -16,6 +17,9 @@ export default function App() {
 
         {/* Section 2: Bank-Facing Dashboard */}
         <Route path="/dashboard" element={<Dashboard />} />
+
+        {/* Section: Knowledge Graph Explorer */}
+        <Route path="/knowledge-graph" element={<KnowledgeGraphPage />} />
 
         {/* Section 3: User-Facing Assessment */}
         <Route path="/assess" element={<Welcome />} />

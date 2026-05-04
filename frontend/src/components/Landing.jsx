@@ -76,9 +76,12 @@ export default function Landing() {
         <div style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.4rem', letterSpacing: '-1px' }}>
           <span style={{ color: 'var(--neon-mint)' }}>Future</span>Bank
         </div>
-        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-          <button className="btn-outline" onClick={() => navigate('/dashboard')} style={{ padding: '0.6rem 1.5rem', fontSize: '0.9rem' }}>
-            Bank Dashboard
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <button className="btn-outline" onClick={() => navigate('/knowledge-graph')} style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem' }}>
+            Knowledge Graph
+          </button>
+          <button className="btn-outline" onClick={() => navigate('/dashboard')} style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem' }}>
+            Dashboard
           </button>
           <button className="btn-primary" onClick={() => navigate('/assess')} style={{ padding: '0.6rem 1.5rem', fontSize: '0.9rem', width: 'auto' }}>
             Try Demo

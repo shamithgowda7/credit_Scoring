@@ -41,6 +41,9 @@ from src.database import (
     get_all_completed_sessions, get_sessions_summary as db_get_sessions_summary
 )
 from api.llm_service import evaluate_and_generate_next, is_llm_available
+from src.knowledge_graph import KnowledgeGraph
+from src.graph_ingestor import ingest_completed_session, recompute_employer_stats, recompute_community_stats
+from src.self_improver import generate_insights, suggest_threshold_adjustments
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +112,14 @@ if demo_users_path.exists():
 GRAPH = load_graph()
 GRAPH_CONTEXTS = load_graph_contexts()
 GRAPH_STATS = get_graph_stats(GRAPH)
+
+# ── Initialize Dynamic Knowledge Graph Engine ────────────────────────────────
+KG_ENGINE = KnowledgeGraph()
+try:
+    KG_ENGINE.load()
+    logger.info(f"KG Engine loaded: {KG_ENGINE.get_stats()}")
+except Exception as e:
+    logger.warning(f"KG Engine load failed (will init on first use): {e}")
 
 # ── FastAPI App ───────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -355,6 +366,11 @@ def submit_answer(req: SubmitAnswerRequest):
                     risk_tier=score_dict.get("risk_tier"),
                     confidence=result.get("confidence"),
                 )
+
+                # Auto-ingest into Knowledge Graph
+                _session_for_kg = get_session(req.session_id)
+                if _session_for_kg:
+                    _auto_ingest_to_kg(_session_for_kg)
                 
                 return {
                     "result": result, 
@@ -370,10 +386,20 @@ def submit_answer(req: SubmitAnswerRequest):
                 return {"result": result, "score_error": str(score_err)}
         else:
             return {"result": result}
-            
+
     except Exception as e:
         logger.error(f"submit-answer error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _auto_ingest_to_kg(session_data: dict):
+    """Background helper to ingest a completed session into the Knowledge Graph."""
+    try:
+        borrower_id = ingest_completed_session(KG_ENGINE, session_data)
+        KG_ENGINE.compute_similarity_edges(threshold=0.80)
+        logger.info(f"Auto-ingested session into KG: {borrower_id}")
+    except Exception as e:
+        logger.warning(f"KG auto-ingest failed: {e}")
 
 @app.post("/score", response_model=ScoringResponse)
 def score(application: ScoringRequest):
@@ -715,6 +741,91 @@ def log_application(app_data: ApplicationLogRequest):
 def graph_stats():
     """Return knowledge graph summary statistics for the dashboard."""
     return GRAPH_STATS
+
+
+# ── Knowledge Graph API Endpoints ────────────────────────────────────────────
+
+@app.get("/kg/stats")
+def kg_stats():
+    """Return dynamic Knowledge Graph statistics."""
+    try:
+        return KG_ENGINE.get_stats()
+    except Exception as e:
+        logger.error(f"KG stats error: {e}")
+        return {"total_nodes": 0, "total_edges": 0, "error": str(e)}
+
+
+@app.get("/kg/graph")
+def kg_graph(max_nodes: int = 200):
+    """Return full graph data for frontend visualization."""
+    try:
+        return KG_ENGINE.serialize_for_frontend(max_nodes=max_nodes)
+    except Exception as e:
+        logger.error(f"KG graph error: {e}")
+        return {"nodes": [], "edges": [], "stats": {}, "error": str(e)}
+
+
+@app.get("/kg/node/{node_id}")
+def kg_node_detail(node_id: str):
+    """Return full detail for a single KG node with its edges."""
+    from src.database import get_kg_node, get_kg_node_edges
+    node = get_kg_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+    edges = get_kg_node_edges(node_id)
+    # If borrower, also compute graph features
+    graph_features = None
+    if node.get("type") == "borrower":
+        graph_features = KG_ENGINE.compute_borrower_features(node_id)
+    return {"node": node, "edges": edges, "graph_features": graph_features}
+
+
+@app.get("/kg/neighborhood/{node_id}")
+def kg_neighborhood(node_id: str, depth: int = 1):
+    """Return the neighborhood subgraph for a node."""
+    return KG_ENGINE.get_neighborhood(node_id, depth=min(depth, 3))
+
+
+@app.get("/kg/insights")
+def kg_insights():
+    """Return self-improving insights from accumulated KG data."""
+    try:
+        insights = generate_insights(KG_ENGINE)
+        thresholds = suggest_threshold_adjustments(KG_ENGINE)
+        return {"insights": insights, "threshold_suggestion": thresholds}
+    except Exception as e:
+        logger.error(f"KG insights error: {e}")
+        return {"insights": [], "threshold_suggestion": {}, "error": str(e)}
+
+
+@app.post("/kg/seed")
+def kg_seed():
+    """Seed/re-seed the KG from static graph data + completed sessions."""
+    try:
+        from src.seed_knowledge_graph import seed_from_static_graph, main as seed_main
+        from src.database import delete_all_kg_data
+        from src.graph_ingestor import ingest_all_existing_sessions
+
+        delete_all_kg_data()
+        seed_from_static_graph(KG_ENGINE)
+        n = ingest_all_existing_sessions(KG_ENGINE)
+        KG_ENGINE.load()
+        KG_ENGINE.compute_similarity_edges(threshold=0.80)
+        recompute_employer_stats(KG_ENGINE)
+        recompute_community_stats(KG_ENGINE)
+        KG_ENGINE.load()
+        return {"status": "seeded", "sessions_ingested": n, "stats": KG_ENGINE.get_stats()}
+    except Exception as e:
+        logger.error(f"KG seed error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/kg/nodes")
+def kg_nodes_list(type: str = None):
+    """List KG nodes, optionally filtered by type."""
+    from src.database import get_kg_nodes
+    nodes = get_kg_nodes(type)
+    return {"nodes": nodes, "count": len(nodes)}
 
 
 # ── LLM Session Endpoints ────────────────────────────────────────────────────
