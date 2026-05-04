@@ -1,205 +1,153 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, ShieldAlert, ActivitySquare, BrainCircuit } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 export default function Results() {
-  const navigate = useNavigate();
-  const [result, setResult] = useState(null);
-  const [ilf, setIlf] = useState(null);
-  const [user, setUser] = useState(null);
-  
-  const [recessionMode, setRecessionMode] = useState(false);
+  const { state } = useLocation();
+  const nav = useNavigate();
   const [showForensics, setShowForensics] = useState(false);
+  const [animScore, setAnimScore] = useState(300);
+  const scoreResult = state?.scoreResult;
 
   useEffect(() => {
-    const resStr = sessionStorage.getItem('scoreResult');
-    const ilfStr = sessionStorage.getItem('ilfResult');
-    const usrStr = sessionStorage.getItem('selectedUser');
-    
-    if (!resStr) {
-      navigate('/assess');
-      return;
-    }
-    setResult(JSON.parse(resStr));
-    if (ilfStr) setIlf(JSON.parse(ilfStr));
-    if (usrStr) setUser(JSON.parse(usrStr));
-  }, [navigate]);
+    if (!scoreResult) { nav('/assess'); return; }
+    const target = scoreResult.score || 0;
+    const dur = 1200;
+    const start = performance.now();
+    const tick = (now) => {
+      const p = Math.min((now - start) / dur, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setAnimScore(Math.round(300 + (target - 300) * eased));
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [scoreResult]);
 
-  if (!result) return null;
+  if (!scoreResult) return null;
 
-  const { score, decision, product, xgboost_score, ignored_features, contributions } = result;
-  const isCrashed = recessionMode && xgboost_score < score - 50;
+  const { score, decision, risk_tier, contributions, product, ignored_features, improvement_notes, rud_boost, graph_features, graph_boost, ilf_boost, ilf_reliability, shadow_score } = scoreResult;
+  const scoreColor = score >= 700 ? '#00e68a' : score >= 400 ? '#f59e0b' : '#f43f5e';
+  const decisionClass = decision === 'STANDARD' ? 'approved' : decision === 'DECLINE' ? 'declined' : 'nano';
+  const pct = ((score - 300) / 600) * 100;
+  const circ = 2 * Math.PI * 80;
+
+  const contribEntries = Object.entries(contributions || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  const maxContrib = Math.max(...contribEntries.map(([, v]) => Math.abs(v)), 0.01);
 
   return (
-    <div className="slide-up" style={{ paddingBottom: '4rem' }}>
-      
-      {/* ── TACTILE RECESSION TOGGLE ── */}
-      <div className="glass-card-cred" style={{ marginBottom: '3rem', padding: '1.5rem 2.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderColor: recessionMode ? 'var(--danger)' : 'var(--border-subtle)' }}>
-        <div>
-          <h3 style={{ fontFamily: 'Outfit', fontSize: '1.2rem', color: recessionMode ? 'var(--danger)' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '10px', margin: 0 }}>
-            <ActivitySquare size={20} />
-            Recession Stress Test
-          </h3>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0 0' }}>
-            Toggle to simulate a macroeconomic shock on standard vs causal AI.
-          </p>
-        </div>
-        <label className="tactile-switch">
-          <input type="checkbox" checked={recessionMode} onChange={() => setRecessionMode(!recessionMode)} />
-          <span className="tactile-slider"></span>
-        </label>
-      </div>
-
-      {/* ── SCORE REVEAL ── */}
-      <div style={{ display: 'flex', gap: '2rem', marginBottom: '3rem', flexWrap: 'wrap' }}>
-        
-        {/* Causal AI Card */}
-        <div className="glass-card-cred" style={{ flex: 1, textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '4px', background: 'var(--neon-mint)' }}></div>
-          <p style={{ color: 'var(--text-muted)', letterSpacing: '2px', textTransform: 'uppercase', fontSize: '0.8rem', fontWeight: 600 }}>Causal Engine</p>
-          <div className="score-big" style={{ margin: '2rem 0' }}>{score}</div>
-          <p style={{ color: 'var(--neon-mint)', fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-            <CheckCircle2 size={16} /> Stable Baseline
-          </p>
+    <div className="results-page">
+      <div className="results-hero animate-in">
+        <div className="score-ring">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <circle cx="100" cy="100" r="80" fill="none" stroke="var(--bg-3)" strokeWidth="8" />
+            <circle cx="100" cy="100" r="80" fill="none" stroke={scoreColor} strokeWidth="8"
+              strokeDasharray={circ} strokeDashoffset={circ - (circ * pct / 100)} strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 1.2s ease' }} />
+          </svg>
+          <span className="score-value" style={{ color: scoreColor }}>{animScore}</span>
+          <span className="score-label">Credit Score</span>
         </div>
 
-        {/* Traditional Black-Box AI Card */}
-        {recessionMode && (
-          <div className="glass-card-cred slide-up" style={{ flex: 1, textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '4px', background: isCrashed ? 'var(--danger)' : 'var(--text-muted)' }}></div>
-            <p style={{ color: 'var(--text-muted)', letterSpacing: '2px', textTransform: 'uppercase', fontSize: '0.8rem', fontWeight: 600 }}>Traditional Black-Box ML</p>
-            <div className={`score-big ${isCrashed ? 'danger' : ''}`} style={{ margin: '2rem 0', color: isCrashed ? 'var(--danger)' : 'var(--text-muted)' }}>
-              {xgboost_score}
-            </div>
-            <p style={{ color: isCrashed ? 'var(--danger)' : 'var(--text-muted)', fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              {isCrashed ? <><ShieldAlert size={16}/> Collapsed due to drift</> : "Simulating..."}
-            </p>
-          </div>
-        )}
+        <div className={`decision-card ${decisionClass}`} style={{ marginTop: 20 }}>
+          <span style={{ fontSize: '1.1rem', fontWeight: 700 }}>
+            {decision === 'STANDARD' ? '✓ Approved' : decision === 'DECLINE' ? '✕ Declined' : '◐ Nano Credit'}
+          </span>
+          {product && <span>— ₹{product.amount?.toLocaleString()} {product.insurance ? '+ Insurance' : ''}</span>}
+        </div>
       </div>
 
-      {/* ── PRODUCT DECISION ── */}
-      <div className={decision === "DECLINE" ? "glass-card-danger" : "glass-card-cred"} style={{ textAlign: 'center', marginBottom: '3rem', padding: '3rem' }}>
-        <h2 style={{ fontFamily: 'Outfit', fontSize: '2.5rem', marginBottom: '1rem', color: decision === "DECLINE" ? 'var(--danger)' : 'var(--text-primary)' }}>
-          {decision === "STANDARD" && "Approved: Standard Line"}
-          {decision === "NANO_CREDIT" && "Approved: Nano Line"}
-          {decision === "DECLINE" && "Application Declined"}
-        </h2>
-        
-        {product && (
-          <>
-            <div style={{ fontFamily: 'Outfit', fontSize: '4rem', fontWeight: 900, margin: '1rem 0', color: 'var(--neon-mint)', letterSpacing: '-2px' }}>
-              ₹{product.amount.toLocaleString()}
-            </div>
-            {product.insurance && (
-              <p style={{ color: 'var(--text-muted)', display: 'inline-block', border: '1px solid var(--border-subtle)', padding: '0.5rem 1rem', borderRadius: '50px', fontSize: '0.9rem' }}>
-                Includes bundled payment protection
-              </p>
-            )}
-          </>
-        )}
+      {/* Boosts summary */}
+      <div className="metric-grid animate-in-1" style={{ marginTop: 20 }}>
+        <div className="card-metric">
+          <span className="metric-label">Risk Tier</span>
+          <span className="metric-value" style={{ fontSize: '1.2rem', color: risk_tier === 'Low' ? '#00e68a' : risk_tier === 'Medium' ? '#f59e0b' : '#f43f5e' }}>{risk_tier}</span>
+        </div>
+        {rud_boost > 0 && <div className="card-metric"><span className="metric-label">RUD Boost</span><span className="metric-value" style={{ fontSize: '1.2rem', color: '#00e68a' }}>+{rud_boost}</span></div>}
+        {graph_boost !== 0 && <div className="card-metric"><span className="metric-label">Graph Boost</span><span className="metric-value" style={{ fontSize: '1.2rem', color: graph_boost > 0 ? '#00e68a' : '#f43f5e' }}>{graph_boost > 0 ? '+' : ''}{graph_boost}</span></div>}
+        {ilf_boost !== 0 && <div className="card-metric"><span className="metric-label">ILF Boost</span><span className="metric-value" style={{ fontSize: '1.2rem', color: ilf_boost > 0 ? '#00e68a' : '#f43f5e' }}>{ilf_boost > 0 ? '+' : ''}{ilf_boost}</span></div>}
+        {shadow_score && <div className="card-metric"><span className="metric-label">Shadow Score</span><span className="metric-value" style={{ fontSize: '1.2rem', color: 'var(--blue)' }}>{shadow_score}</span></div>}
       </div>
 
-      {/* ── FORENSICS TOGGLE ── */}
-      <button className="btn-outline" onClick={() => setShowForensics(!showForensics)} style={{ width: '100%', marginBottom: '3rem' }}>
-        {showForensics ? "Hide Causal Forensics" : "View Causal Forensics"}
-      </button>
-
-      {showForensics && (
-        <div className="slide-up">
-          
-          {/* Ignored Spurious Features */}
-          <div className="glass-card-cred" style={{ marginBottom: '2rem' }}>
-            <h3 style={{ fontFamily: 'Outfit', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--danger)', marginBottom: '1.5rem' }}>
-              <ShieldAlert size={24} /> Ignored Spurious Bias
-            </h3>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '2rem', fontSize: '0.95rem', lineHeight: 1.5 }}>
-              Standard models exploit these correlations. Our causal engine proved they are spurious and intentionally discarded them to guarantee fairness.
-            </p>
-            <div style={{ display: 'grid', gap: '1rem' }}>
-              {ignored_features?.map(f => (
-                <div key={f.name} style={{ background: 'var(--danger-dim)', border: '1px solid var(--danger-glow)', padding: '1.2rem', borderRadius: '12px' }}>
-                  <strong style={{ color: 'var(--text-primary)', fontFamily: 'Outfit', fontSize: '1.1rem' }}>{f.name}</strong>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '6px' }}>{f.description}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Used Features */}
-          <div className="glass-card-cred" style={{ marginBottom: '2rem' }}>
-            <h3 style={{ fontFamily: 'Outfit', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--neon-mint)', marginBottom: '2rem' }}>
-              <CheckCircle2 size={24} /> Verified Causal Drivers
-            </h3>
-            {Object.entries(contributions || {}).sort((a,b) => Math.abs(b[1]) - Math.abs(a[1])).map(([feat, val]) => (
-              <div key={feat} style={{ marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', marginBottom: '8px', color: 'var(--text-primary)' }}>
-                  <span style={{ fontFamily: 'Inter' }}>{feat}</span>
-                  <span style={{ color: val > 0 ? 'var(--danger)' : 'var(--neon-mint)', fontWeight: 600 }}>{val > 0 ? 'Risk Increasing' : 'Risk Reducing'}</span>
-                </div>
-                <div className="progress-container">
-                  <div className="progress-bar" style={{ 
-                    width: `${Math.min(100, Math.abs(val) * 30)}%`, 
-                    background: val > 0 ? 'var(--danger)' : 'var(--neon-mint)'
-                  }}></div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* ILF Timeline */}
-          {ilf && (
-            <div className="glass-card-cred" style={{ marginBottom: '2rem' }}>
-              <h3 style={{ fontFamily: 'Outfit', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)', marginBottom: '1.5rem' }}>
-                <BrainCircuit size={24} /> Behavioral Biometrics
-              </h3>
-              <p style={{ color: 'var(--text-muted)', marginBottom: '2.5rem', fontSize: '0.95rem' }}>
-                Sub-millisecond reaction tracking verifies cognitive intent and prevents brute-forcing.
-              </p>
-              
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', height: '180px', padding: '1rem 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                {ilf.latencies_sec.map((lat, i) => {
-                  const heightPct = Math.min(100, (lat / 10) * 100);
-                  const isSuspicious = lat < 1.0 || lat > 6.0;
-                  const color = isSuspicious ? 'var(--danger)' : 'var(--neon-mint)';
-                  
-                  return (
-                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontFamily: 'Outfit' }}>{lat.toFixed(2)}s</span>
-                      <div style={{ width: '2px', height: `${heightPct}%`, background: color, position: 'relative' }}>
-                        <div style={{ position: 'absolute', top: 0, left: '-4px', width: '10px', height: '10px', borderRadius: '50%', background: color, boxShadow: `0 0 10px ${color}` }}></div>
-                      </div>
-                      <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>Q{i+1}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              
-              <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-                <div style={{ 
-                  display: 'inline-block', 
-                  border: `1px solid ${ilf.reliability_label === 'High' ? 'var(--neon-mint)' : 'var(--danger)'}`,
-                  color: ilf.reliability_label === 'High' ? 'var(--neon-mint)' : 'var(--danger)',
-                  padding: '0.8rem 1.5rem', 
-                  borderRadius: '50px', 
-                  fontFamily: 'Outfit',
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  letterSpacing: '1px',
-                  textTransform: 'uppercase'
-                }}>
-                  {ilf.reliability_pct}% Reliability — {ilf.reliability_label}
-                </div>
-              </div>
-            </div>
-          )}
-
+      {/* Improvement notes */}
+      {improvement_notes && (
+        <div className="card animate-in-2" style={{ marginTop: 16, borderColor: 'var(--border-accent)' }}>
+          <div className="section-title" style={{ color: 'var(--accent)' }}>📈 Self-Improving Feedback</div>
+          <p style={{ fontSize: '0.88rem', color: 'var(--text-1)', lineHeight: 1.6 }}>{improvement_notes}</p>
         </div>
       )}
 
-      <button className="btn-primary" onClick={() => navigate('/')} style={{ marginTop: '1rem' }}>
-        Reset Engine
-      </button>
+      {/* Forensic Mode */}
+      <div className="forensics-section animate-in-3">
+        <div className="forensics-toggle" style={{ marginTop: 16 }}>
+          <div className={`toggle-switch${showForensics ? ' on' : ''}`} onClick={() => setShowForensics(!showForensics)} />
+          <span style={{ fontWeight: 600 }}>Forensic Explainability — Why this score?</span>
+        </div>
+
+        {showForensics && (
+          <div style={{ animation: 'fade-in 0.3s ease' }}>
+            {/* Causal drivers */}
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div className="section-title" style={{ color: '#00e68a', fontSize: '0.88rem' }}>✓ Verified Causal Drivers</div>
+              {contribEntries.map(([feat, val]) => (
+                <div className="contrib-bar" key={feat}>
+                  <span className="bar-label">{feat}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${Math.abs(val) / maxContrib * 100}%`, background: val > 0 ? '#f43f5e' : '#00e68a' }} />
+                  </div>
+                  <span className="bar-value" style={{ color: val > 0 ? '#f43f5e' : '#00e68a' }}>{val > 0 ? '+' : ''}{val.toFixed(3)}</span>
+                </div>
+              ))}
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-2)', marginTop: 8 }}>Positive = increases default risk. Negative = decreases default risk.</p>
+            </div>
+
+            {/* Ignored spurious features */}
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div className="section-title" style={{ color: '#f43f5e', fontSize: '0.88rem' }}>✕ Ignored Spurious Features</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(ignored_features || []).map((f, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', background: 'var(--rose-dim)', borderRadius: 'var(--radius-sm)', fontSize: '0.82rem' }}>
+                    <span style={{ color: '#f43f5e', fontWeight: 700 }}>BLOCKED</span>
+                    <span style={{ fontWeight: 600 }}>{f.name}</span>
+                    <span style={{ color: 'var(--text-1)' }}>— {f.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ILF Biometrics */}
+            {ilf_reliability !== null && ilf_reliability !== undefined && (
+              <div className="card">
+                <div className="section-title" style={{ fontSize: '0.88rem' }}>🧠 Behavioral Biometrics (ILF)</div>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <div className="card-metric"><span className="metric-label">ILF Reliability</span><span className="metric-value" style={{ fontSize: '1.1rem' }}>{(ilf_reliability * 100).toFixed(0)}%</span></div>
+                  <div className="card-metric"><span className="metric-label">Score Impact</span><span className="metric-value" style={{ fontSize: '1.1rem', color: ilf_boost >= 0 ? '#00e68a' : '#f43f5e' }}>{ilf_boost >= 0 ? '+' : ''}{ilf_boost} pts</span></div>
+                </div>
+              </div>
+            )}
+
+            {/* Graph features */}
+            {graph_features && (
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="section-title" style={{ fontSize: '0.88rem' }}>🕸️ Knowledge Graph Context</div>
+                <div className="table-wrap">
+                  <table><tbody>
+                    {Object.entries(graph_features).filter(([k]) => k !== 'graph_risk_adjustment').map(([k, v]) => (
+                      <tr key={k}><td style={{ fontWeight: 600 }}>{k}</td><td>{typeof v === 'number' ? v.toFixed(3) : String(v)}</td></tr>
+                    ))}
+                  </tbody></table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginTop: 24 }} className="animate-in-4">
+        <button className="btn btn-primary" onClick={() => nav('/assess')}>Run Another Assessment</button>
+        <button className="btn btn-secondary" onClick={() => nav('/dashboard')}>View Dashboard</button>
+        {state?.sessionId && (
+          <a href={`http://127.0.0.1:8000/report/${state.sessionId}`} target="_blank" rel="noreferrer" className="btn btn-secondary">📄 Adverse Action Report</a>
+        )}
+      </div>
     </div>
   );
 }

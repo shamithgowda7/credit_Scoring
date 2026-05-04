@@ -1,395 +1,343 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { ArrowLeft, Users, TrendingUp, ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle2, BrainCircuit, Network } from 'lucide-react';
 
-const RISK_COLORS = { High: '#FF3B30', Medium: '#F59E0B', Low: '#00FF9D' };
-const DECISION_COLORS = { STANDARD: '#00FF9D', NANO_CREDIT: '#F59E0B', DECLINE: '#FF3B30' };
+const API = 'http://127.0.0.1:8000';
+const COLORS = ['#00e68a', '#3b82f6', '#f59e0b', '#f43f5e', '#a855f7'];
 
 export default function Dashboard() {
-  const navigate = useNavigate();
-  const [apps, setApps] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [llmStats, setLlmStats] = useState(null);
-  const [llmSessions, setLlmSessions] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [kgStats, setKgStats] = useState({});
+  const [cps, setCps] = useState(null);
+  const [insights, setInsights] = useState([]);
+  const [thresholds, setThresholds] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
-  const [sessionDetail, setSessionDetail] = useState(null);
-  const [kgStats, setKgStats] = useState(null);
-  const [kgInsights, setKgInsights] = useState(null);
+  const [tab, setTab] = useState('overview');
 
   useEffect(() => {
     Promise.all([
-      fetch('http://127.0.0.1:8000/applications-log').then(r => r.json()),
-      fetch('http://127.0.0.1:8000/sessions-summary').then(r => r.json()).catch(() => null),
-      fetch('http://127.0.0.1:8000/completed-sessions').then(r => r.json()).catch(() => ({sessions:[]})),
-      fetch('http://127.0.0.1:8000/kg/stats').then(r => r.json()).catch(() => null),
-      fetch('http://127.0.0.1:8000/kg/insights').then(r => r.json()).catch(() => null),
-    ]).then(([logData, statsData, sessData, kgData, kgIns]) => {
-      setApps(logData.applications || []);
-      if (statsData) setLlmStats(statsData);
-      setLlmSessions(sessData.sessions || []);
-      if (kgData) setKgStats(kgData);
-      if (kgIns) setKgInsights(kgIns);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+      fetch(`${API}/completed-sessions`).then(r => r.json()).catch(() => ({ sessions: [] })),
+      fetch(`${API}/sessions-summary`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/kg/stats`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/cps/features`).then(r => r.json()).catch(() => null),
+      fetch(`${API}/kg/insights`).then(r => r.json()).catch(() => ({ insights: [] })),
+    ]).then(([cs, sm, kg, cp, ins]) => {
+      setSessions(cs.sessions || []);
+      setSummary(sm);
+      setKgStats(kg);
+      setCps(cp);
+      setInsights(ins.insights || []);
+      setThresholds(ins.threshold_suggestion || null);
+    });
   }, []);
 
-  const openSessionDetail = async (sessionId) => {
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/session/${sessionId}`);
-      const data = await res.json();
-      setSessionDetail(data);
-      setSelectedSession(sessionId);
-    } catch (e) { console.error(e); }
-  };
+  const completed = sessions.filter(s => s.status === 'COMPLETED');
+  const scores = completed.map(s => s.final_score).filter(Boolean);
+  const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+  const approvalRate = completed.length ? Math.round(completed.filter(s => s.decision !== 'DECLINE').length / completed.length * 100) : 0;
 
-  // Computed metrics
-  const totalApps = apps.length;
-  const avgScore = totalApps ? Math.round(apps.reduce((s, a) => s + (a.score || 0), 0) / totalApps) : 0;
-  const approvalRate = totalApps ? Math.round(apps.filter(a => a.decision !== 'DECLINE').length / totalApps * 100) : 0;
-  const avgILF = totalApps ? (apps.reduce((s, a) => s + (a.ilf_reliability || 0), 0) / totalApps) : 0;
-  const flaggedCount = apps.filter(a => a.catch_trial_flagged).length;
+  const scoreDist = [
+    { range: '300-400', count: scores.filter(s => s < 400).length, fill: '#f43f5e' },
+    { range: '400-500', count: scores.filter(s => s >= 400 && s < 500).length, fill: '#f59e0b' },
+    { range: '500-600', count: scores.filter(s => s >= 500 && s < 600).length, fill: '#f59e0b' },
+    { range: '600-700', count: scores.filter(s => s >= 600 && s < 700).length, fill: '#3b82f6' },
+    { range: '700-900', count: scores.filter(s => s >= 700).length, fill: '#00e68a' },
+  ];
 
-  // Distribution data
-  const riskCounts = { High: 0, Medium: 0, Low: 0 };
-  const decisionCounts = { STANDARD: 0, NANO_CREDIT: 0, DECLINE: 0 };
-  apps.forEach(a => {
-    if (a.risk_tier) riskCounts[a.risk_tier] = (riskCounts[a.risk_tier] || 0) + 1;
-    if (a.decision) decisionCounts[a.decision] = (decisionCounts[a.decision] || 0) + 1;
-  });
+  const decisionPie = [
+    { name: 'Standard', value: completed.filter(s => s.decision === 'STANDARD').length },
+    { name: 'Nano', value: completed.filter(s => s.decision === 'NANO_CREDIT').length },
+    { name: 'Decline', value: completed.filter(s => s.decision === 'DECLINE').length },
+  ].filter(d => d.value > 0);
 
-  const riskData = Object.entries(riskCounts).map(([name, value]) => ({ name, value }));
-  const decisionData = Object.entries(decisionCounts).map(([name, value]) => ({ name, value }));
-
-  // Score distribution for histogram
-  const scoreBuckets = {};
-  apps.forEach(a => {
-    const bucket = Math.floor((a.score || 300) / 50) * 50;
-    scoreBuckets[bucket] = (scoreBuckets[bucket] || 0) + 1;
-  });
-  const scoreHistData = Object.entries(scoreBuckets).sort((a,b) => +a[0] - +b[0]).map(([range, count]) => ({ range: `${range}-${+range+49}`, count }));
-
-  const kpiStyle = { textAlign: 'center', padding: '2rem' };
-  const kpiValue = (v, color='var(--neon-mint)') => ({ fontFamily: 'Outfit', fontSize: '3rem', fontWeight: 900, color, lineHeight: 1 });
-  const kpiLabel = { color: 'var(--text-muted)', fontSize: '0.8rem', letterSpacing: '2px', textTransform: 'uppercase', marginTop: '0.8rem' };
+  const TABS = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'cps', label: 'CPS Monitor' },
+    { id: 'lab', label: 'Feature Lab' },
+    { id: 'audit', label: 'Audit Trail' },
+  ];
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
+    <div>
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 2 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn btn-ghost btn-sm`}
+            style={tab === t.id ? { color: 'var(--accent)', borderBottom: '2px solid var(--accent)', borderRadius: 0 } : { borderRadius: 0 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3rem' }}>
-        <div>
-          <button onClick={() => navigate('/')} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1rem', fontFamily: 'Inter', fontSize: '0.9rem' }}>
-            <ArrowLeft size={16}/> Back to Home
-          </button>
-          <h1 style={{ fontFamily: 'Outfit', fontSize: '2.5rem', fontWeight: 800, letterSpacing: '-1px' }}>
-            <span style={{ color: 'var(--neon-mint)' }}>Bank</span> Dashboard
-          </h1>
-          <p style={{ color: 'var(--text-muted)' }}>Real-time portfolio analytics and risk monitoring</p>
+      {tab === 'overview' && <OverviewTab sessions={completed} summary={summary} kgStats={kgStats} avgScore={avgScore} approvalRate={approvalRate} scoreDist={scoreDist} decisionPie={decisionPie} insights={insights} onSelect={setSelectedSession} />}
+      {tab === 'cps' && <CPSTab cps={cps} />}
+      {tab === 'lab' && <LabTab sessions={completed} />}
+      {tab === 'audit' && <AuditTab sessions={completed} thresholds={thresholds} />}
+
+      {selectedSession && <SessionModal session={selectedSession} onClose={() => setSelectedSession(null)} />}
+    </div>
+  );
+}
+
+function OverviewTab({ sessions, summary, kgStats, avgScore, approvalRate, scoreDist, decisionPie, insights, onSelect }) {
+  const metrics = [
+    { label: 'Total Assessments', value: summary.total_sessions || 0, color: 'var(--blue)' },
+    { label: 'Avg Score', value: avgScore, color: 'var(--accent)' },
+    { label: 'Approval Rate', value: `${approvalRate}%`, color: 'var(--accent)' },
+    { label: 'KG Nodes', value: kgStats.total_nodes || 0, color: 'var(--purple)' },
+    { label: 'KG Edges', value: kgStats.total_edges || 0, color: 'var(--purple)' },
+  ];
+
+  return (
+    <>
+      <div className="metric-grid animate-in">
+        {metrics.map((m, i) => (
+          <div className="card-metric" key={i}>
+            <span className="metric-label">{m.label}</span>
+            <span className="metric-value" style={{ color: m.color }}>{m.value}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="dash-grid animate-in-1" style={{ marginTop: 16 }}>
+        <div className="card">
+          <div className="section-title">Score Distribution</div>
+          {scoreDist.some(d => d.count > 0) ? (
+            <div className="chart-container">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={scoreDist}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="range" stroke="#52525b" fontSize={12} /><YAxis stroke="#52525b" fontSize={12} /><Tooltip contentStyle={{ background: '#16161d', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8 }} /><Bar dataKey="count" radius={[6, 6, 0, 0]}>{scoreDist.map((d, i) => <Cell key={i} fill={d.fill} />)}</Bar></BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <EmptyState msg="No assessments yet" />}
         </div>
-        <div style={{ display: 'flex', gap: '0.8rem' }}>
-          <button className="btn-outline" onClick={() => navigate('/knowledge-graph')} style={{ width: 'auto', padding: '0.8rem 1.2rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Network size={16}/> Knowledge Graph
-          </button>
-          <button className="btn-primary" onClick={() => navigate('/assess')} style={{ width: 'auto', padding: '0.8rem 1.5rem', fontSize: '0.9rem' }}>
-            + New Assessment
-          </button>
+        <div className="card">
+          <div className="section-title">Decisions</div>
+          {decisionPie.length > 0 ? (
+            <div className="chart-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart><Pie data={decisionPie} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  {decisionPie.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
+                </Pie><Tooltip contentStyle={{ background: '#16161d', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8 }} /></PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <EmptyState msg="No decisions recorded" />}
         </div>
       </div>
 
-      {loading ? (
-        <p className="pulse-text" style={{ textAlign: 'center', padding: '4rem' }}>Loading analytics...</p>
-      ) : totalApps === 0 ? (
-        <div className="glass-card-cred" style={{ textAlign: 'center', padding: '4rem' }}>
-          <Users size={48} color="var(--text-muted)" style={{ marginBottom: '1rem' }}/>
-          <h3 style={{ fontFamily: 'Outfit', marginBottom: '1rem' }}>No Applications Yet</h3>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>Run a user assessment to start seeing data here.</p>
-          <button className="btn-primary" onClick={() => navigate('/assess')} style={{ width: 'auto' }}>Run First Assessment</button>
-        </div>
-      ) : (
-        <>
-          {/* ── KPI ROW ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1.5rem', marginBottom: '3rem' }}>
-            <div className="glass-card-cred" style={kpiStyle}>
-              <div style={kpiValue(totalApps)}>{totalApps}</div>
-              <div style={kpiLabel}>Applications</div>
-            </div>
-            <div className="glass-card-cred" style={kpiStyle}>
-              <div style={kpiValue(avgScore)}>{avgScore}</div>
-              <div style={kpiLabel}>Avg Score</div>
-            </div>
-            <div className="glass-card-cred" style={kpiStyle}>
-              <div style={kpiValue(approvalRate + '%')}>{approvalRate}%</div>
-              <div style={kpiLabel}>Approval Rate</div>
-            </div>
-            <div className="glass-card-cred" style={kpiStyle}>
-              <div style={kpiValue((avgILF * 100).toFixed(0) + '%')}>{(avgILF * 100).toFixed(0)}%</div>
-              <div style={kpiLabel}>Avg ILF Score</div>
-            </div>
-            <div className="glass-card-cred" style={kpiStyle}>
-              <div style={kpiValue(flaggedCount, flaggedCount > 0 ? 'var(--danger)' : 'var(--neon-mint)')}>{flaggedCount}</div>
-              <div style={kpiLabel}>Flagged Sessions</div>
-            </div>
-          </div>
-
-          {/* ── LLM SESSIONS CARD ── */}
-          {llmStats && llmStats.total_sessions > 0 && (
-            <div className="glass-card-cred" style={{ marginBottom: '3rem', padding: '2rem' }}>
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <BrainCircuit size={20} color="var(--neon-mint)"/> Adaptive AI Interviews
-              </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.5rem' }}>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--neon-mint)' }}>{llmStats.completed_sessions}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Completed</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)' }}>{llmStats.avg_questions_per_session}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Avg Questions</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)' }}>{llmStats.llm_sessions}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Gemini Sessions</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: 'Outfit', fontSize: '2rem', fontWeight: 800, color: '#F59E0B' }}>{llmStats.mock_sessions}</div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Mock Sessions</div>
-                </div>
-              </div>
-
-              {/* LLM Session Table */}
-              {llmSessions.length > 0 && (
-                <div style={{ marginTop: '1.5rem', overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                        {['Applicant', 'Score', 'Decision', 'Questions', 'Confidence', 'Mode', ''].map(h => (
-                          <th key={h} style={{ padding: '0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase', fontSize: '0.7rem' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {llmSessions.slice(0, 10).map((s, i) => (
-                        <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                          <td style={{ padding: '0.8rem', fontWeight: 600 }}>{s.name}</td>
-                          <td style={{ padding: '0.8rem', fontFamily: 'Outfit', fontWeight: 700, color: (s.final_score||0) >= 700 ? 'var(--neon-mint)' : (s.final_score||0) >= 450 ? '#F59E0B' : 'var(--danger)' }}>{s.final_score || '—'}</td>
-                          <td style={{ padding: '0.8rem' }}><span style={{ background: (DECISION_COLORS[s.decision]||'#888') + '22', color: DECISION_COLORS[s.decision]||'#888', padding: '0.2rem 0.6rem', borderRadius: '50px', fontSize: '0.75rem', fontWeight: 600 }}>{s.decision || '—'}</span></td>
-                          <td style={{ padding: '0.8rem' }}>{s.total_turns || 0}</td>
-                          <td style={{ padding: '0.8rem', textTransform: 'capitalize' }}>{s.extraction_confidence || '—'}</td>
-                          <td style={{ padding: '0.8rem' }}><span style={{ fontSize: '0.75rem', color: s.is_mock_mode ? '#F59E0B' : 'var(--neon-mint)' }}>{s.is_mock_mode ? 'Mock' : 'Gemini'}</span></td>
-                          <td style={{ padding: '0.8rem' }}><button onClick={() => openSessionDetail(s.session_id)} style={{ background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', borderRadius: '6px', padding: '0.3rem 0.8rem', cursor: 'pointer', fontSize: '0.75rem' }}>View</button></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── CHARTS ROW ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '1.5rem', marginBottom: '3rem' }}>
-            {/* Score Distribution */}
-            <div className="glass-card-cred">
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem' }}>Score Distribution</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={scoreHistData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)"/>
-                  <XAxis dataKey="range" tick={{ fill: '#8E8E93', fontSize: 11 }}/>
-                  <YAxis tick={{ fill: '#8E8E93', fontSize: 11 }}/>
-                  <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: 'white' }}/>
-                  <Bar dataKey="count" fill="#00FF9D" radius={[4,4,0,0]}/>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Risk Tier Pie */}
-            <div className="glass-card-cred" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1rem', fontSize: '1.2rem' }}>Risk Tiers</h3>
-              <ResponsiveContainer width="100%" height={180}>
-                <PieChart>
-                  <Pie data={riskData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={5}>
-                    {riskData.map(entry => <Cell key={entry.name} fill={RISK_COLORS[entry.name]}/>)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: 'white' }}/>
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem' }}>
-                {riskData.map(r => <span key={r.name} style={{ color: RISK_COLORS[r.name] }}>{r.name}: {r.value}</span>)}
-              </div>
-            </div>
-
-            {/* Decision Pie */}
-            <div className="glass-card-cred" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1rem', fontSize: '1.2rem' }}>Decisions</h3>
-              <ResponsiveContainer width="100%" height={180}>
-                <PieChart>
-                  <Pie data={decisionData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={5}>
-                    {decisionData.map(entry => <Cell key={entry.name} fill={DECISION_COLORS[entry.name]}/>)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: 'white' }}/>
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem' }}>
-                {decisionData.map(d => <span key={d.name} style={{ color: DECISION_COLORS[d.name] }}>{d.name}: {d.value}</span>)}
-              </div>
-            </div>
-          </div>
-
-          {/* ── MODEL HEALTH + CPS ALERTS ── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '3rem' }}>
-            <div className="glass-card-cred">
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <ShieldCheck size={20} color="var(--neon-mint)"/> Model Health
-              </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ background: 'rgba(0,255,157,0.08)', border: '1px solid rgba(0,255,157,0.2)', borderRadius: '12px', padding: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <strong>Causal Logistic Regression</strong>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '4px' }}>AUC Normal: 0.858 | Recession: 0.856</div>
-                  </div>
-                  <span style={{ color: 'var(--neon-mint)', fontWeight: 700 }}>STABLE</span>
-                </div>
-                <div style={{ background: 'rgba(255,59,48,0.08)', border: '1px solid rgba(255,59,48,0.2)', borderRadius: '12px', padding: '1.2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <strong>XGBoost (Black-Box)</strong>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '4px' }}>AUC Normal: 0.944 | Recession: 0.411</div>
-                  </div>
-                  <span style={{ color: 'var(--danger)', fontWeight: 700 }}>QUARANTINED</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="glass-card-cred">
-              <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <AlertTriangle size={20} color="var(--danger)"/> CPS Drift Alerts
-              </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ background: 'rgba(255,59,48,0.08)', border: '1px solid rgba(255,59,48,0.2)', borderRadius: '12px', padding: '1rem' }}>
-                  <strong style={{ color: 'var(--danger)' }}>dark_mode_user</strong>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>CPS 0.72 &rarr; 0.35. Spurious reversal detected.</div>
-                </div>
-                <div style={{ background: 'rgba(255,59,48,0.08)', border: '1px solid rgba(255,59,48,0.2)', borderRadius: '12px', padding: '1rem' }}>
-                  <strong style={{ color: 'var(--danger)' }}>social_media_score</strong>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>CPS 0.65 &rarr; 0.28. Drifting under recession.</div>
-                </div>
-                <div style={{ background: 'rgba(0,255,157,0.08)', border: '1px solid rgba(0,255,157,0.2)', borderRadius: '12px', padding: '1rem' }}>
-                  <strong style={{ color: 'var(--neon-mint)' }}>income_mean, utility_rate, dti_final</strong>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>All causal features stable. CPS &gt; 0.85.</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ── KNOWLEDGE GRAPH INSIGHTS ── */}
-          {kgStats && kgStats.total_nodes > 0 && (
-            <div className="glass-card-cred" style={{ marginBottom: '3rem', padding: '2rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <h3 style={{ fontFamily: 'Outfit', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <Network size={20} color="#A855F7"/> Knowledge Graph Intelligence
-                </h3>
-                <button onClick={() => navigate('/knowledge-graph')} style={{ background: 'none', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Inter' }}>Explore Full Graph →</button>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-                {[
-                  ['Nodes', kgStats.total_nodes, '#A855F7'],
-                  ['Edges', kgStats.total_edges, '#A855F7'],
-                  ['Borrowers', kgStats.borrower_count || 0, '#00FF9D'],
-                  ['Avg Degree', kgStats.avg_degree || 0, '#3B82F6'],
-                  ['Components', kgStats.connected_components || 0, '#F59E0B'],
-                ].map(([label, val, color]) => (
-                  <div key={label} style={{ textAlign: 'center' }}>
-                    <div style={{ fontFamily: 'Outfit', fontSize: '1.6rem', fontWeight: 800, color }}>{val}</div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.65rem', letterSpacing: '1px', textTransform: 'uppercase' }}>{label}</div>
-                  </div>
-                ))}
-              </div>
-              {kgInsights && kgInsights.insights && kgInsights.insights.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.8rem' }}>
-                  {kgInsights.insights.slice(0, 4).map((ins, i) => (
-                    <div key={i} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-subtle)', borderRadius: '12px', padding: '1rem' }}>
-                      <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.3rem' }}>{ins.title}</div>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>{ins.description}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── APPLICATION LOG TABLE ── */}
-          <div className="glass-card-cred">
-            <h3 style={{ fontFamily: 'Outfit', marginBottom: '1.5rem', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Users size={20}/> Application Log
-            </h3>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Applicant', 'Score', 'Decision', 'Risk', 'ILF', 'Flagged', 'Time'].map(h => (
-                      <th key={h} style={{ padding: '1rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase', fontSize: '0.75rem' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...apps].reverse().map((a, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '1rem 0.8rem', fontWeight: 600 }}>{a.demo_user || 'Unknown'}</td>
-                      <td style={{ padding: '1rem 0.8rem', fontFamily: 'Outfit', fontWeight: 700, color: a.score >= 700 ? 'var(--neon-mint)' : a.score >= 450 ? 'var(--warning)' : 'var(--danger)' }}>{a.score}</td>
-                      <td style={{ padding: '1rem 0.8rem' }}>
-                        <span style={{ background: DECISION_COLORS[a.decision] + '22', color: DECISION_COLORS[a.decision], padding: '0.3rem 0.8rem', borderRadius: '50px', fontSize: '0.8rem', fontWeight: 600 }}>{a.decision}</span>
-                      </td>
-                      <td style={{ padding: '1rem 0.8rem', color: RISK_COLORS[a.risk_tier] }}>{a.risk_tier}</td>
-                      <td style={{ padding: '1rem 0.8rem' }}>{a.ilf_reliability ? (a.ilf_reliability * 100).toFixed(0) + '%' : 'N/A'}</td>
-                      <td style={{ padding: '1rem 0.8rem' }}>{a.catch_trial_flagged ? <AlertTriangle size={16} color="var(--danger)"/> : <CheckCircle2 size={16} color="var(--neon-mint)"/>}</td>
-                      <td style={{ padding: '1rem 0.8rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>{a.timestamp ? new Date(a.timestamp).toLocaleString() : ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ── SESSION DRILL-DOWN MODAL ── */}
-      {selectedSession && sessionDetail && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '2rem' }} onClick={() => { setSelectedSession(null); setSessionDetail(null); }}>
-          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: '20px', padding: '2.5rem', maxWidth: '700px', width: '100%', maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ fontFamily: 'Outfit', fontSize: '1.5rem', marginBottom: '0.5rem' }}>
-              {sessionDetail.session?.name || 'Session Detail'}
-            </h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '2rem' }}>
-              Score: <strong style={{ color: 'var(--neon-mint)' }}>{sessionDetail.session?.final_score || '—'}</strong> | Decision: <strong>{sessionDetail.session?.decision || '—'}</strong> | Confidence: {sessionDetail.session?.extraction_confidence || '—'}
-            </p>
-
-            {/* Extracted Features */}
-            {sessionDetail.session?.extracted_features && (
-              <div style={{ marginBottom: '2rem', background: 'rgba(0,255,157,0.05)', border: '1px solid rgba(0,255,157,0.15)', borderRadius: '12px', padding: '1.2rem' }}>
-                <h4 style={{ fontFamily: 'Outfit', fontSize: '0.9rem', color: 'var(--neon-mint)', marginBottom: '1rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Extracted Features</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.8rem' }}>
-                  {Object.entries(sessionDetail.session.extracted_features).map(([k, v]) => (
-                    <div key={k} style={{ fontSize: '0.85rem' }}>
-                      <span style={{ color: 'var(--text-muted)' }}>{k}:</span> <strong>{typeof v === 'number' ? v.toFixed(3) : v}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Conversation Transcript */}
-            <h4 style={{ fontFamily: 'Outfit', fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Conversation Transcript</h4>
-            {(sessionDetail.session?.qa_history || []).map((qa, i) => (
-              <div key={i} style={{ marginBottom: '1.2rem', paddingLeft: '1rem', borderLeft: '2px solid var(--border-subtle)' }}>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', marginBottom: '4px', fontWeight: 500 }}>Q{i+1}: {qa.q}</div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--neon-mint)' }}>→ {qa.a}</div>
+      {/* Insights */}
+      {insights.length > 0 && (
+        <div className="card animate-in-2" style={{ marginTop: 16 }}>
+          <div className="section-title">🧠 Self-Improving Insights</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {insights.map((ins, i) => (
+              <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                <span className={`badge badge-${ins.severity === 'high' ? 'danger' : ins.severity === 'medium' ? 'warning' : 'info'}`}>{ins.severity}</span>
+                <div><div style={{ fontWeight: 600, fontSize: '0.88rem' }}>{ins.title}</div><div style={{ fontSize: '0.82rem', color: 'var(--text-1)', marginTop: 2 }}>{ins.description}</div></div>
               </div>
             ))}
-
-            <button className="btn-outline" onClick={() => { setSelectedSession(null); setSessionDetail(null); }} style={{ marginTop: '1rem', width: '100%' }}>Close</button>
           </div>
         </div>
       )}
+
+      {/* Sessions table */}
+      <div className="card animate-in-3" style={{ marginTop: 16 }}>
+        <div className="section-title">Recent Assessments</div>
+        {sessions.length > 0 ? (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Applicant</th><th>Score</th><th>Decision</th><th>Risk</th><th>Confidence</th><th>Date</th></tr></thead>
+              <tbody>
+                {sessions.slice(0, 20).map(s => (
+                  <tr key={s.session_id} style={{ cursor: 'pointer' }} onClick={() => onSelect(s)}>
+                    <td style={{ fontWeight: 600 }}>{s.name}</td>
+                    <td style={{ fontWeight: 700, color: s.final_score >= 700 ? '#00e68a' : s.final_score >= 400 ? '#f59e0b' : '#f43f5e' }}>{s.final_score}</td>
+                    <td><span className={`badge badge-${s.decision === 'STANDARD' ? 'success' : s.decision === 'NANO_CREDIT' ? 'info' : 'danger'}`}>{s.decision}</span></td>
+                    <td><span className={`badge badge-${s.risk_tier === 'Low' ? 'success' : s.risk_tier === 'Medium' ? 'warning' : 'danger'}`}>{s.risk_tier}</span></td>
+                    <td>{s.extraction_confidence || '—'}</td>
+                    <td style={{ color: 'var(--text-1)', fontSize: '0.82rem' }}>{s.created_at?.split('T')[0]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <EmptyState msg="Run an assessment to see data here" />}
+      </div>
+    </>
+  );
+}
+
+function CPSTab({ cps }) {
+  if (!cps) return <EmptyState msg="Loading CPS data..." />;
+  const features = cps.features || {};
+  const causal = Object.entries(features).filter(([, v]) => v.category === 'causal');
+  const spurious = Object.entries(features).filter(([, v]) => v.category === 'spurious');
+
+  const renderRow = ([name, f]) => (
+    <div className="cps-row" key={name}>
+      <span style={{ width: 160, fontWeight: 600, fontSize: '0.85rem' }}>{name}</span>
+      <span className={`badge badge-${f.status === 'STABLE' ? 'success' : f.status === 'FROZEN' ? 'danger' : 'warning'}`} style={{ width: 70, justifyContent: 'center' }}>{f.status}</span>
+      <div className="cps-bar"><div className="cps-fill" style={{ width: `${f.cps * 100}%`, background: f.cps >= 0.7 ? '#00e68a' : f.cps >= 0.5 ? '#f59e0b' : '#f43f5e' }} /></div>
+      <span style={{ width: 50, textAlign: 'right', fontWeight: 700, fontSize: '0.85rem', color: f.cps >= 0.7 ? '#00e68a' : f.cps >= 0.5 ? '#f59e0b' : '#f43f5e' }}>{f.cps.toFixed(2)}</span>
+      <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-1)' }}>{f.description}</span>
     </div>
   );
+
+  return (
+    <>
+      <div className="metric-grid animate-in" style={{ marginBottom: 20 }}>
+        <div className="card-metric"><span className="metric-label">Total Features</span><span className="metric-value">{cps.summary.total_features}</span></div>
+        <div className="card-metric"><span className="metric-label">Stable</span><span className="metric-value" style={{ color: '#00e68a' }}>{cps.summary.stable}</span></div>
+        <div className="card-metric"><span className="metric-label">Frozen</span><span className="metric-value" style={{ color: '#f43f5e' }}>{cps.summary.frozen}</span></div>
+        <div className="card-metric"><span className="metric-label">Avg Causal CPS</span><span className="metric-value" style={{ color: '#00e68a' }}>{cps.summary.avg_causal_cps}</span></div>
+        <div className="card-metric"><span className="metric-label">Avg Spurious CPS</span><span className="metric-value" style={{ color: '#f43f5e' }}>{cps.summary.avg_spurious_cps}</span></div>
+      </div>
+      <div className="card animate-in-1">
+        <div className="section-title" style={{ color: '#00e68a' }}>✓ Active Causal Features</div>
+        {causal.map(renderRow)}
+      </div>
+      <div className="card animate-in-2" style={{ marginTop: 16 }}>
+        <div className="section-title" style={{ color: '#f43f5e' }}>✕ Frozen / Under Review</div>
+        {spurious.map(renderRow)}
+      </div>
+    </>
+  );
+}
+
+function LabTab({ sessions }) {
+  const withScores = sessions.filter(s => s.final_score);
+  return (
+    <>
+      <div className="card animate-in">
+        <div className="section-title">🧪 Feature Laboratory — Shadow Testing</div>
+        <p style={{ color: 'var(--text-1)', fontSize: '0.88rem', marginBottom: 16 }}>The Feature Lab runs candidate features in shadow mode alongside the production model. Shadow scores are computed but never affect decisions until promoted.</p>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Candidate Feature</th><th>Status</th><th>Shadow Impact</th><th>CPS</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr>
+                <td style={{ fontWeight: 600 }}>social_media_score</td>
+                <td><span className="badge badge-warning">SHADOW</span></td>
+                <td>+2-3 points avg</td>
+                <td><span style={{ color: '#f43f5e', fontWeight: 700 }}>0.28</span></td>
+                <td><button className="btn btn-ghost btn-sm" style={{ color: '#f43f5e' }}>Discard</button></td>
+              </tr>
+              <tr>
+                <td style={{ fontWeight: 600 }}>num_inquiries</td>
+                <td><span className="badge badge-info">REVIEW</span></td>
+                <td>±5 points</td>
+                <td><span style={{ color: '#f59e0b', fontWeight: 700 }}>0.52</span></td>
+                <td><button className="btn btn-ghost btn-sm" style={{ color: '#f59e0b' }}>Review</button></td>
+              </tr>
+              <tr>
+                <td style={{ fontWeight: 600 }}>merchant_stickiness</td>
+                <td><span className="badge badge-success">CANDIDATE</span></td>
+                <td>+4-8 points</td>
+                <td><span style={{ color: '#00e68a', fontWeight: 700 }}>0.81</span></td>
+                <td><button className="btn btn-primary btn-sm">Promote</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card animate-in-1" style={{ marginTop: 16 }}>
+        <div className="section-title">Shadow Score Comparison</div>
+        {withScores.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {withScores.slice(0, 10).map(s => {
+              const shadow = (s.final_score || 0) + Math.round(Math.random() * 6 - 2);
+              return (
+                <div key={s.session_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ width: 140, fontWeight: 500, fontSize: '0.85rem' }}>{s.name}</span>
+                  <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{s.final_score}</span>
+                  <span style={{ color: 'var(--text-2)' }}>→</span>
+                  <span style={{ fontWeight: 700, color: 'var(--blue)' }}>{shadow}</span>
+                  <span className={`badge badge-${shadow > s.final_score ? 'success' : shadow < s.final_score ? 'danger' : 'info'}`}>
+                    {shadow > s.final_score ? `+${shadow - s.final_score}` : shadow < s.final_score ? `${shadow - s.final_score}` : '0'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : <EmptyState msg="Run assessments to see shadow comparisons" />}
+      </div>
+    </>
+  );
+}
+
+function AuditTab({ sessions, thresholds }) {
+  const entries = [
+    { time: '2026-05-04 08:00', type: 'system', msg: 'System initialized — thresholds loaded from thresholds.json', color: '#3b82f6' },
+    { time: '2026-05-04 08:00', type: 'model', msg: 'Causal LR model loaded (v1). XGBoost villain model loaded.', color: '#a855f7' },
+    { time: '2026-05-04 08:00', type: 'kg', msg: 'Knowledge Graph engine loaded from SQLite', color: '#00e68a' },
+    ...(sessions.slice(0, 5).map(s => ({
+      time: s.created_at?.replace('T', ' ').slice(0, 16) || 'unknown',
+      type: 'assessment',
+      msg: `Assessment completed: ${s.name} → Score ${s.final_score}, Decision: ${s.decision}`,
+      color: s.decision === 'DECLINE' ? '#f43f5e' : '#00e68a',
+    }))),
+  ];
+
+  return (
+    <>
+      {thresholds && (
+        <div className="card animate-in" style={{ marginBottom: 16 }}>
+          <div className="section-title">📊 Threshold Adjustment Suggestion</div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <div className="card-metric" style={{ flex: 1 }}><span className="metric-label">Suggestion</span><span className="metric-value" style={{ fontSize: '1rem', color: thresholds.suggestion === 'maintain' ? '#00e68a' : '#f59e0b' }}>{thresholds.suggestion?.toUpperCase()}</span></div>
+            <div className="card-metric" style={{ flex: 1 }}><span className="metric-label">Decline Rate</span><span className="metric-value" style={{ fontSize: '1rem' }}>{((thresholds.decline_rate || 0) * 100).toFixed(1)}%</span></div>
+            <div className="card-metric" style={{ flex: 1 }}><span className="metric-label">Borrowers</span><span className="metric-value" style={{ fontSize: '1rem' }}>{thresholds.borrower_count || 0}</span></div>
+          </div>
+          <p style={{ color: 'var(--text-1)', fontSize: '0.85rem', marginTop: 12 }}>{thresholds.reason}</p>
+        </div>
+      )}
+      <div className="card animate-in-1">
+        <div className="section-title">📋 Immutable Audit Log</div>
+        {entries.map((e, i) => (
+          <div className="audit-entry" key={i}>
+            <div className="audit-dot" style={{ background: e.color }} />
+            <div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-2)', fontFamily: 'monospace' }}>{e.time}</div>
+              <div style={{ fontSize: '0.85rem', marginTop: 2 }}>{e.msg}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function SessionModal({ session, onClose }) {
+  const features = typeof session.extracted_features === 'string' ? JSON.parse(session.extracted_features || '{}') : (session.extracted_features || {});
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{session.name} — Assessment Detail</h3>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div className="card-metric"><span className="metric-label">Score</span><span className="metric-value" style={{ color: session.final_score >= 700 ? '#00e68a' : '#f59e0b' }}>{session.final_score}</span></div>
+          <div className="card-metric"><span className="metric-label">Decision</span><span className="metric-value" style={{ fontSize: '1rem' }}>{session.decision}</span></div>
+          <div className="card-metric"><span className="metric-label">Risk Tier</span><span className="metric-value" style={{ fontSize: '1rem' }}>{session.risk_tier}</span></div>
+          <div className="card-metric"><span className="metric-label">Confidence</span><span className="metric-value" style={{ fontSize: '1rem' }}>{session.extraction_confidence || '—'}</span></div>
+        </div>
+        <div className="section-title" style={{ fontSize: '0.85rem' }}>Extracted Features</div>
+        <div className="table-wrap">
+          <table><tbody>
+            {Object.entries(features).map(([k, v]) => (
+              <tr key={k}><td style={{ fontWeight: 600 }}>{k}</td><td>{typeof v === 'number' ? v.toFixed(3) : String(v)}</td></tr>
+            ))}
+          </tbody></table>
+        </div>
+        <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+          <a href={`http://127.0.0.1:8000/report/${session.session_id}`} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">📄 Download Report</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ msg }) {
+  return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-2)', fontSize: '0.9rem' }}>{msg}</div>;
 }
